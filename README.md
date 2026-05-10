@@ -34,6 +34,10 @@ Not implemented yet:
 - real order placement;
 - reconciliation/fill upload.
 
+Future Binance order adapters should use the official Binance Python connector repository behind
+the executor adapter boundary. Do not add the dependency until the adapter implementation starts and
+the exact modular package/version is pinned.
+
 ## Install On A VPS
 
 Prerequisites:

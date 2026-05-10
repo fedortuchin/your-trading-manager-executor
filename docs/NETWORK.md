@@ -43,6 +43,8 @@ Broker validation and future broker adapters must be limited to the configured Y
 selected broker API domains. Expected examples:
 
 - Binance: Binance REST/WebSocket API domains configured for the selected market and account type.
+  Future Binance adapters should use the official Binance Python connector repository behind the
+  executor adapter boundary.
 - T-Bank Invest: T-Bank Invest API endpoints configured by the adapter.
 
 Broker API hosts must be explicit adapter configuration, not YTM-provided secret-bearing payloads.
