@@ -8,6 +8,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 from ytm_executor.guards import SecretFieldError, reject_secret_fields
+from ytm_executor.risk import (
+    RiskPolicy,
+    RiskState,
+    evaluate_command_risk,
+    missing_risk_policy,
+)
 from ytm_executor.secret_store import CredentialSummary
 
 VALIDATION_TTL_SECONDS = 24 * 60 * 60
@@ -23,6 +29,8 @@ def preflight_command(
     item: dict[str, Any],
     *,
     local_credentials: Iterable[CredentialSummary],
+    risk_policy: RiskPolicy | None = None,
+    risk_state: RiskState | None = None,
     validation_summaries: Iterable[dict[str, Any]],
     now: datetime | None = None,
 ) -> CommandPreflightDecision:
@@ -56,6 +64,19 @@ def preflight_command(
     )
     if validation_block is not None:
         return validation_block
+    risk_decision = evaluate_command_risk(
+        command,
+        execution_mode=execution_mode,
+        policy=risk_policy or missing_risk_policy(),
+        state=risk_state or RiskState(realized_loss_by_date={}),
+        now=timestamp,
+    )
+    if not risk_decision.passed:
+        return _reject(
+            risk_decision.reason_code or "risk_preflight_failed",
+            risk_decision.reason or "local risk preflight failed",
+            extra={"riskPreflight": "failed"},
+        )
     if execution_mode == "real":
         return _reject(
             "real_execution_disabled",
@@ -119,21 +140,30 @@ def _acknowledge_without_order_placement(
             "preflight": "passed",
             "provider": provider,
             "reason": "broker adapters are not enabled in this foundation build",
+            "riskPreflight": "passed",
             "zeroSecret": True,
         },
     )
 
 
-def _reject(reason_code: str, reason: str) -> CommandPreflightDecision:
+def _reject(
+    reason_code: str,
+    reason: str,
+    *,
+    extra: dict[str, Any] | None = None,
+) -> CommandPreflightDecision:
+    result_payload = {
+        "executorAction": "local_preflight_failed",
+        "preflight": "failed",
+        "preflightReasonCode": reason_code,
+        "reason": reason,
+        "zeroSecret": True,
+    }
+    if extra:
+        result_payload.update(extra)
     return _decision(
         status="rejected",
-        result_payload={
-            "executorAction": "local_preflight_failed",
-            "preflight": "failed",
-            "preflightReasonCode": reason_code,
-            "reason": reason,
-            "zeroSecret": True,
-        },
+        result_payload=result_payload,
     )
 
 

@@ -35,6 +35,9 @@ Primary controls:
 - broker credential validation runs from the executor host and stores only sanitized status,
   warnings, permissions summary, and hashed account fingerprint;
 - leased commands pass local preflight before any future broker adapter can run;
+- a local mandatory risk policy gates leased commands with kill switch, paper-only mode, allowed
+  instruments, allowed order types, max order notional, max position notional, daily loss, and
+  leverage limits;
 - YTM API payloads are rejected client-side when secret-like fields are present;
 - YTM server APIs also reject secret-like result and metadata fields;
 - Docker runtime uses a non-root user, persistent local volume, dropped Linux capabilities, and
@@ -50,6 +53,8 @@ Known limits:
 - users should harden SSH access, backups, host firewall rules, and broker-side API restrictions;
 - no real broker order adapters are enabled in the current foundation build.
 - local preflight currently rejects all `real` commands even if YTM leases one by mistake.
+- missing, disabled, incomplete, or kill-switched local risk policy rejects provider-backed
+  commands before any adapter can run.
 - validate-only broker API calls still require users to trust and harden the executor host because
   that host can decrypt local broker credentials at runtime.
 
@@ -61,6 +66,8 @@ Users and auditors can verify this by checking:
 - `src/ytm_executor/validation.py`: calls broker read/identity endpoints and returns only sanitized
   validation summaries.
 - `src/ytm_executor/preflight.py`: rejects unsafe leased commands locally before order adapters.
+- `src/ytm_executor/risk.py`: loads local risk policy from the executor host and fails closed when
+  required limits are absent or exceeded.
 - `tests/test_no_secret_egress.py`: stores fake broker secrets locally and verifies YTM payloads do
   not contain them.
 - Release artifacts are built with `scripts/build_artifact.sh` and can be signed with

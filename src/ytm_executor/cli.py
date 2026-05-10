@@ -13,6 +13,17 @@ from urllib.parse import urlparse
 from ytm_executor import __version__
 from ytm_executor.client import YtmClient
 from ytm_executor.preflight import CommandPreflightDecision, preflight_command
+from ytm_executor.risk import (
+    DEFAULT_RISK_POLICY_FILE,
+    DEFAULT_RISK_STATE_FILE,
+    RiskPolicy,
+    policy_completeness_blocks,
+    read_risk_policy,
+    read_risk_state,
+    risk_policy_public_summary,
+    risk_policy_to_file_payload,
+    write_risk_policy,
+)
 from ytm_executor.secret_store import DEFAULT_KEY_FILE, DEFAULT_SECRETS_FILE, LocalSecretStore
 from ytm_executor.state import (
     DEFAULT_STATE_FILE,
@@ -33,6 +44,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--secrets-file", default=str(DEFAULT_SECRETS_FILE))
     parser.add_argument("--key-file", default=str(DEFAULT_KEY_FILE))
     parser.add_argument("--validations-file", default=str(DEFAULT_VALIDATIONS_FILE))
+    parser.add_argument("--risk-policy-file", default=str(DEFAULT_RISK_POLICY_FILE))
+    parser.add_argument("--risk-state-file", default=str(DEFAULT_RISK_STATE_FILE))
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     enroll_parser = subparsers.add_parser("enroll")
@@ -56,6 +69,20 @@ def main(argv: list[str] | None = None) -> int:
     broker_validate.add_argument("--name", default="main")
     broker_subparsers.add_parser("list")
 
+    risk_parser = subparsers.add_parser("risk")
+    risk_subparsers = risk_parser.add_subparsers(dest="risk_command", required=True)
+    risk_subparsers.add_parser("show")
+    risk_init = risk_subparsers.add_parser("init")
+    risk_init.add_argument("--allow-symbol", action="append", default=[])
+    risk_init.add_argument("--allow-order-type", action="append", default=[])
+    risk_init.add_argument("--max-order-notional")
+    risk_init.add_argument("--max-position-notional")
+    risk_init.add_argument("--max-daily-loss")
+    risk_init.add_argument("--max-leverage", default="1")
+    risk_init.add_argument("--allow-real", action="store_true")
+    risk_init.add_argument("--kill-switch-off", action="store_true")
+    risk_init.add_argument("--force", action="store_true")
+
     args = parser.parse_args(argv)
     try:
         if args.command == "enroll":
@@ -64,6 +91,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run(args)
         if args.command == "broker":
             return _broker(args)
+        if args.command == "risk":
+            return _risk(args)
     except Exception as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -102,12 +131,14 @@ def _run(args: argparse.Namespace) -> int:
     validation_store = _validation_store(args)
     client = YtmClient(server_url=state.server_url, allowed_hosts=state.allowed_hosts)
     while True:
+        risk_policy = read_risk_policy(Path(args.risk_policy_file))
         capabilities = {"leases": True, "zeroSecret": True}
         capabilities.update(
             store.heartbeat_capability(
                 validation_summaries=validation_store.list_public(),
             )
         )
+        capabilities["localRiskPolicy"] = risk_policy_public_summary(risk_policy)
         client.heartbeat(
             access_token=state.access_token,
             capabilities=capabilities,
@@ -120,6 +151,8 @@ def _run(args: argparse.Namespace) -> int:
             decision = preflight_command(
                 item,
                 local_credentials=store.list(),
+                risk_policy=risk_policy,
+                risk_state=read_risk_state(Path(args.risk_state_file)),
                 validation_summaries=validation_store.list_public(),
             )
             _record_preflight_decision(client, state.access_token, item, decision)
@@ -153,6 +186,25 @@ def _broker(args: argparse.Namespace) -> int:
     return 2
 
 
+def _risk(args: argparse.Namespace) -> int:
+    policy_file = Path(args.risk_policy_file)
+    if args.risk_command == "show":
+        policy = read_risk_policy(policy_file)
+        payload = risk_policy_to_file_payload(policy)
+        payload["configured"] = policy.configured
+        payload["completenessBlocks"] = policy_completeness_blocks(policy)
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+    if args.risk_command == "init":
+        if policy_file.exists() and not args.force:
+            raise ValueError("risk policy already exists; use --force to overwrite it")
+        policy = _risk_policy_from_args(args)
+        write_risk_policy(policy_file, policy)
+        print("local risk policy written")
+        return 0
+    return 2
+
+
 def _broker_secret(args: argparse.Namespace) -> dict[str, str]:
     if args.provider == "tbank":
         token = args.token or getpass.getpass("T-Bank Invest token: ")
@@ -163,6 +215,56 @@ def _broker_secret(args: argparse.Namespace) -> dict[str, str]:
         "apiKey": _required_text(api_key, "api_key"),
         "apiSecret": _required_text(api_secret, "api_secret"),
     }
+
+
+def _risk_policy_from_args(args: argparse.Namespace) -> RiskPolicy:
+    from decimal import Decimal
+
+    policy = RiskPolicy(
+        configured=True,
+        enabled=True,
+        kill_switch=not args.kill_switch_off,
+        paper_only=not args.allow_real,
+        allowed_symbols=tuple(_unique_text(args.allow_symbol, upper=True)),
+        allowed_order_types=tuple(_unique_order_type(args.allow_order_type)),
+        max_order_notional=_optional_decimal_arg(args.max_order_notional, "max-order-notional"),
+        max_position_notional=_optional_decimal_arg(
+            args.max_position_notional,
+            "max-position-notional",
+        ),
+        max_daily_loss=_optional_decimal_arg(args.max_daily_loss, "max-daily-loss"),
+        max_leverage=Decimal(str(args.max_leverage)),
+    )
+    if not policy.kill_switch:
+        blocks = policy_completeness_blocks(policy)
+        if blocks:
+            raise ValueError("; ".join(blocks))
+    return policy
+
+
+def _optional_decimal_arg(value: object, name: str):
+    if value is None:
+        return None
+    from decimal import Decimal
+
+    return Decimal(str(value))
+
+
+def _unique_text(values: list[str], *, upper: bool) -> list[str]:
+    result = []
+    seen = set()
+    for value in values:
+        normalized = value.strip()
+        if upper:
+            normalized = normalized.upper()
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            result.append(normalized)
+    return result
+
+
+def _unique_order_type(values: list[str]) -> list[str]:
+    return _unique_text([value.lower().replace("-", "_") for value in values], upper=False)
 
 
 def _store(args: argparse.Namespace) -> LocalSecretStore:

@@ -14,6 +14,8 @@ Current foundation build:
   - T-Bank Invest gRPC: `invest-public-api.tinkoff.ru:443`
 - Continuous `ytm-executor run` only needs the configured YTM server until real broker adapters are
   enabled.
+- Local risk policy and risk state are read from the executor host filesystem and do not require
+  network access. YTM receives only sanitized risk summary counts and mode flags in heartbeat.
 
 The executor stores the allowed YTM host during enrollment and refuses YTM API requests to any other
 host.

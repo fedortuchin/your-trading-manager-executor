@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from ytm_executor.preflight import preflight_command
+from ytm_executor.risk import RiskPolicy, RiskState
 from ytm_executor.secret_store import CredentialSummary
 
 
@@ -10,6 +12,8 @@ def test_preflight_acknowledges_external_paper_without_order_placement() -> None
     decision = preflight_command(
         _leased_command(provider="binance", execution_mode="external_paper"),
         local_credentials=(CredentialSummary(provider="binance", name="main"),),
+        risk_policy=_risk_policy(),
+        risk_state=_risk_state(),
         validation_summaries=(
             _validation(
                 provider="binance",
@@ -27,6 +31,7 @@ def test_preflight_acknowledges_external_paper_without_order_placement() -> None
         "preflight": "passed",
         "provider": "binance",
         "reason": "broker adapters are not enabled in this foundation build",
+        "riskPreflight": "passed",
         "zeroSecret": True,
     }
 
@@ -38,6 +43,8 @@ def test_preflight_rejects_command_secret_like_fields() -> None:
     decision = preflight_command(
         command,
         local_credentials=(CredentialSummary(provider="binance", name="main"),),
+        risk_policy=_risk_policy(),
+        risk_state=_risk_state(),
         validation_summaries=(
             _validation(provider="binance", checked_at="2026-05-10T10:00:00Z"),
         ),
@@ -54,6 +61,8 @@ def test_preflight_rejects_missing_local_credential() -> None:
     decision = preflight_command(
         _leased_command(provider="tbank", execution_mode="external_paper"),
         local_credentials=(CredentialSummary(provider="binance", name="main"),),
+        risk_policy=_risk_policy(),
+        risk_state=_risk_state(),
         validation_summaries=(
             _validation(provider="tbank", checked_at="2026-05-10T10:00:00Z"),
         ),
@@ -68,6 +77,8 @@ def test_preflight_rejects_failed_or_stale_validation() -> None:
     failed = preflight_command(
         _leased_command(provider="binance", execution_mode="external_paper"),
         local_credentials=(CredentialSummary(provider="binance", name="main"),),
+        risk_policy=_risk_policy(),
+        risk_state=_risk_state(),
         validation_summaries=(
             _validation(
                 provider="binance",
@@ -80,6 +91,8 @@ def test_preflight_rejects_failed_or_stale_validation() -> None:
     stale = preflight_command(
         _leased_command(provider="binance", execution_mode="external_paper"),
         local_credentials=(CredentialSummary(provider="binance", name="main"),),
+        risk_policy=_risk_policy(),
+        risk_state=_risk_state(),
         validation_summaries=(
             _validation(provider="binance", checked_at="2026-05-09T10:00:00Z"),
         ),
@@ -96,6 +109,8 @@ def test_preflight_rejects_real_execution_even_with_valid_credential() -> None:
     decision = preflight_command(
         _leased_command(provider="binance", execution_mode="real"),
         local_credentials=(CredentialSummary(provider="binance", name="main"),),
+        risk_policy=_risk_policy(paper_only=False),
+        risk_state=_risk_state(),
         validation_summaries=(
             _validation(
                 provider="binance",
@@ -110,10 +125,69 @@ def test_preflight_rejects_real_execution_even_with_valid_credential() -> None:
     assert decision.result_payload["preflightReasonCode"] == "real_execution_disabled"
 
 
+def test_preflight_rejects_missing_risk_policy() -> None:
+    decision = preflight_command(
+        _leased_command(provider="binance", execution_mode="external_paper"),
+        local_credentials=(CredentialSummary(provider="binance", name="main"),),
+        validation_summaries=(
+            _validation(
+                provider="binance",
+                checked_at="2026-05-10T10:00:00Z",
+                trading_allowed=True,
+            ),
+        ),
+        now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
+    )
+
+    assert decision.status == "rejected"
+    assert decision.result_payload["preflightReasonCode"] == "risk_policy_missing"
+    assert decision.result_payload["riskPreflight"] == "failed"
+
+
+def test_preflight_rejects_risk_kill_switch() -> None:
+    decision = preflight_command(
+        _leased_command(provider="binance", execution_mode="external_paper"),
+        local_credentials=(CredentialSummary(provider="binance", name="main"),),
+        risk_policy=_risk_policy(kill_switch=True),
+        risk_state=_risk_state(),
+        validation_summaries=(
+            _validation(provider="binance", checked_at="2026-05-10T10:00:00Z"),
+        ),
+        now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
+    )
+
+    assert decision.status == "rejected"
+    assert decision.result_payload["preflightReasonCode"] == "risk_kill_switch_enabled"
+
+
+def test_preflight_rejects_order_over_local_notional_limit() -> None:
+    command = _leased_command(provider="binance", execution_mode="external_paper")
+    command["command"]["commandPayload"]["orderNotional"] = "1001"
+
+    decision = preflight_command(
+        command,
+        local_credentials=(CredentialSummary(provider="binance", name="main"),),
+        risk_policy=_risk_policy(),
+        risk_state=_risk_state(),
+        validation_summaries=(
+            _validation(provider="binance", checked_at="2026-05-10T10:00:00Z"),
+        ),
+        now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
+    )
+
+    assert decision.status == "rejected"
+    assert decision.result_payload["preflightReasonCode"] == "risk_order_notional_exceeded"
+
+
 def _leased_command(*, provider: str, execution_mode: str) -> dict[str, object]:
     return {
         "command": {
-            "commandPayload": {},
+            "commandPayload": {
+                "leverage": "1",
+                "orderNotional": "100",
+                "orderType": "limit",
+                "projectedPositionNotional": "100",
+            },
             "executionAccountSource": "provider",
             "executionMode": execution_mode,
             "id": "command-1",
@@ -144,3 +218,22 @@ def _validation(
         "status": status,
         "warnings": [],
     }
+
+
+def _risk_policy(*, kill_switch: bool = False, paper_only: bool = True) -> RiskPolicy:
+    return RiskPolicy(
+        configured=True,
+        enabled=True,
+        kill_switch=kill_switch,
+        paper_only=paper_only,
+        allowed_symbols=("BTCUSDT",),
+        allowed_order_types=("limit",),
+        max_order_notional=Decimal("1000"),
+        max_position_notional=Decimal("5000"),
+        max_daily_loss=Decimal("250"),
+        max_leverage=Decimal("1"),
+    )
+
+
+def _risk_state() -> RiskState:
+    return RiskState(realized_loss_by_date={})

@@ -12,6 +12,7 @@ host and must not be sent to YTM Cloud.
 - command lease requests;
 - approved commands created by YTM;
 - sanitized executor results and preflight rejection reasons.
+- local risk policy summary counts and mode flags, not the full local policy.
 
 ## What YTM Cloud Must Not See
 
@@ -21,11 +22,12 @@ host and must not be sent to YTM Cloud.
 - private keys;
 - passwords or passphrases;
 - broker credential plaintext.
+- local broker credential files or local risk state files.
 
 ## How To Verify
 
 1. Inspect the public source code in this repository.
-2. Install from a pinned release tag, for example `v0.1.0`, not from `main`.
+2. Install from a pinned release tag, for example `v0.2.0`, not from `main`.
 3. Prefer a pinned image digest for production:
 
    ```text
@@ -41,13 +43,16 @@ host and must not be sent to YTM Cloud.
 5. Verify the Docker image signature with cosign:
 
    ```bash
-   cosign verify ghcr.io/fedortuchin/your-trading-manager-executor:v0.1.0 \
+   cosign verify ghcr.io/fedortuchin/your-trading-manager-executor:v0.2.0 \
      --certificate-identity-regexp 'https://github.com/fedortuchin/your-trading-manager-executor/.github/workflows/ci.yml@.*' \
      --certificate-oidc-issuer https://token.actions.githubusercontent.com
    ```
 
 6. Review `docs/NETWORK.md` and run the executor with outbound allowlisting where possible.
 7. Restrict broker-side API credentials with IP allowlists and disabled withdrawals.
+8. Keep the local executor risk policy in source-controlled infrastructure or another audited
+   local change process. YTM Cloud can request an order, but it cannot disable the executor's local
+   kill switch or raise local limits.
 
 ## Honest Limits
 
@@ -61,3 +66,7 @@ host and must not be sent to YTM Cloud.
   pinned images, network allowlisting, and hardened infrastructure.
 - The current foundation build has no real order adapters. `real` commands are locally rejected by
   executor preflight.
+- The local risk policy is mandatory for provider-backed command preflight. Missing policy,
+  `killSwitch=true`, incomplete limits, unsupported symbol/order type, excessive notional,
+  excessive projected position, daily loss breach, or excessive leverage all fail closed before any
+  adapter can run.

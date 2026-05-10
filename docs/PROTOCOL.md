@@ -34,7 +34,7 @@ Heartbeat may report non-secret local credential metadata:
 
 ```json
 {
-  "clientVersion": "0.1.0",
+  "clientVersion": "0.2.0",
   "heartbeatStatus": "online",
   "capabilities": {
     "leases": true,
@@ -43,12 +43,26 @@ Heartbeat may report non-secret local credential metadata:
         "name": "main",
         "provider": "tbank"
       }
-    ]
+    ],
+    "localRiskPolicy": {
+      "allowedOrderTypeCount": 1,
+      "allowedSymbolCount": 2,
+      "configured": true,
+      "enabled": true,
+      "killSwitch": false,
+      "limits": {
+        "maxDailyLoss": true,
+        "maxOrderNotional": true,
+        "maxPositionNotional": true
+      },
+      "paperOnly": true
+    }
   }
 }
 ```
 
-It must not report actual broker tokens or API secrets.
+It must not report actual broker tokens, API secrets, or full local risk files. Risk heartbeat data
+is a sanitized summary only.
 
 ## Lease
 
@@ -58,6 +72,11 @@ Authorization: Bearer <executor access token>
 ```
 
 YTM returns either `item: null` or one command for the executor's broker account.
+
+The executor repeats local checks after leasing. A provider-backed command is rejected locally when
+the local risk policy is missing, disabled, incomplete, kill-switched, paper-only for `real`, or the
+command violates local instrument, order type, notional, projected position, daily loss, or leverage
+limits.
 
 ## Result
 
