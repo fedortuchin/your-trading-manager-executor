@@ -161,7 +161,7 @@ compose() {
 }
 
 enroll_executor() {
-  compose run --rm ytm-executor enroll \
+  compose run --rm -T ytm-executor enroll \
     --server-url "$SERVER_URL" \
     --enrollment-token "$ENROLLMENT_TOKEN"
 }
