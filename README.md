@@ -16,6 +16,7 @@ Implemented:
 - heartbeat with non-secret credential metadata;
 - validate-only broker credential checks from the executor host;
 - heartbeat with sanitized validation status, permissions summary, and account fingerprint;
+- local command preflight before any future broker adapter can run;
 - command lease polling;
 - client-side rejection of secret-like fields in YTM API payloads;
 - Docker-first VPS installer;
@@ -138,6 +139,17 @@ Run continuously:
 ytm-executor run
 ```
 
+When a command is leased, the executor runs local preflight before acknowledging anything:
+
+- command payload must not contain secret-like fields;
+- command provider must match a locally configured broker credential provider;
+- local broker credential validation must be fresh, passed, and account-readable;
+- `external_paper` is acknowledged as dry-run with `order_placement_skipped`;
+- `real` is locally rejected in this foundation build.
+
+Rejected preflight results are sanitized and reported as `rejected` with
+`executorAction=local_preflight_failed`.
+
 ## Security Model
 
 YTM Cloud may receive:
@@ -159,6 +171,8 @@ YTM Cloud must not receive:
 The executor rejects outgoing YTM payloads containing secret-like keys before sending them.
 Broker validation may send broker credentials only to the selected broker API from the executor
 host. Those credentials are never included in YTM API payloads.
+Command preflight is also local and fail-closed: no adapter execution can be added later without
+passing these local checks first.
 
 Network expectations are documented in `docs/NETWORK.md`.
 

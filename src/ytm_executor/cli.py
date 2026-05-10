@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 from ytm_executor import __version__
 from ytm_executor.client import YtmClient
+from ytm_executor.preflight import CommandPreflightDecision, preflight_command
 from ytm_executor.secret_store import DEFAULT_KEY_FILE, DEFAULT_SECRETS_FILE, LocalSecretStore
 from ytm_executor.state import (
     DEFAULT_STATE_FILE,
@@ -116,7 +117,12 @@ def _run(args: argparse.Namespace) -> int:
         item = lease_response.get("item")
         if isinstance(item, dict):
             print(json.dumps(item, ensure_ascii=False, sort_keys=True))
-            _acknowledge_without_order_placement(client, state.access_token, item)
+            decision = preflight_command(
+                item,
+                local_credentials=store.list(),
+                validation_summaries=validation_store.list_public(),
+            )
+            _record_preflight_decision(client, state.access_token, item, decision)
         if args.once:
             return 0
         time.sleep(max(1, int(args.interval_seconds)))
@@ -170,10 +176,11 @@ def _validation_store(args: argparse.Namespace) -> LocalValidationStore:
     return LocalValidationStore(validations_file=Path(args.validations_file))
 
 
-def _acknowledge_without_order_placement(
+def _record_preflight_decision(
     client: YtmClient,
     access_token: str,
     item: dict[str, object],
+    decision: CommandPreflightDecision,
 ) -> None:
     command = expect_object(item, "command")
     lease = expect_object(item, "lease")
@@ -181,12 +188,8 @@ def _acknowledge_without_order_placement(
         access_token=access_token,
         command_id=_expect_text(command, "id"),
         lease_id=_expect_text(lease, "id"),
-        status="acknowledged",
-        result_payload={
-            "executorAction": "order_placement_skipped",
-            "reason": "broker adapters are not enabled in this foundation build",
-            "zeroSecret": True,
-        },
+        status=decision.status,
+        result_payload=decision.result_payload,
     )
 
 
