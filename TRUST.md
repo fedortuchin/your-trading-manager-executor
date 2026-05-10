@@ -27,7 +27,7 @@ host and must not be sent to YTM Cloud.
 ## How To Verify
 
 1. Inspect the public source code in this repository.
-2. Install from a pinned release tag, for example `v0.2.0`, not from `main`.
+2. Install from a pinned release tag, for example `v0.3.0`, not from `main`.
 3. Prefer a pinned image digest for production:
 
    ```text
@@ -43,7 +43,7 @@ host and must not be sent to YTM Cloud.
 5. Verify the Docker image signature with cosign:
 
    ```bash
-   cosign verify ghcr.io/fedortuchin/your-trading-manager-executor:v0.2.0 \
+   cosign verify ghcr.io/fedortuchin/your-trading-manager-executor:v0.3.0 \
      --certificate-identity-regexp 'https://github.com/fedortuchin/your-trading-manager-executor/.github/workflows/ci.yml@.*' \
      --certificate-oidc-issuer https://token.actions.githubusercontent.com
    ```
