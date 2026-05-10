@@ -73,12 +73,21 @@ def main(argv: list[str] | None = None) -> int:
     risk_subparsers = risk_parser.add_subparsers(dest="risk_command", required=True)
     risk_subparsers.add_parser("show")
     risk_init = risk_subparsers.add_parser("init")
+    risk_init.add_argument("--allow-market", action="append", default=[])
+    risk_init.add_argument("--allow-margin-mode", action="append", default=[])
     risk_init.add_argument("--allow-symbol", action="append", default=[])
     risk_init.add_argument("--allow-order-type", action="append", default=[])
     risk_init.add_argument("--max-order-notional")
     risk_init.add_argument("--max-position-notional")
+    risk_init.add_argument(
+        "--max-symbol-notional",
+        action="append",
+        default=[],
+        help="Per-symbol exposure limit in SYMBOL=VALUE format.",
+    )
     risk_init.add_argument("--max-daily-loss")
     risk_init.add_argument("--max-leverage", default="1")
+    risk_init.add_argument("--position-mode", default="one_way", choices=["one_way"])
     risk_init.add_argument("--allow-real", action="store_true")
     risk_init.add_argument("--kill-switch-off", action="store_true")
     risk_init.add_argument("--force", action="store_true")
@@ -261,6 +270,8 @@ def _risk_policy_from_args(args: argparse.Namespace) -> RiskPolicy:
         enabled=True,
         kill_switch=not args.kill_switch_off,
         paper_only=not args.allow_real,
+        allowed_markets=tuple(_unique_lower_text(args.allow_market)),
+        allowed_margin_modes=tuple(_unique_lower_text(args.allow_margin_mode)),
         allowed_symbols=tuple(_unique_text(args.allow_symbol, upper=True)),
         allowed_order_types=tuple(_unique_order_type(args.allow_order_type)),
         max_order_notional=_optional_decimal_arg(args.max_order_notional, "max-order-notional"),
@@ -268,8 +279,10 @@ def _risk_policy_from_args(args: argparse.Namespace) -> RiskPolicy:
             args.max_position_notional,
             "max-position-notional",
         ),
+        max_symbol_notional=_symbol_notional_limits(args.max_symbol_notional),
         max_daily_loss=_optional_decimal_arg(args.max_daily_loss, "max-daily-loss"),
         max_leverage=Decimal(str(args.max_leverage)),
+        position_mode=str(args.position_mode).strip().lower(),
     )
     if not policy.kill_switch:
         blocks = policy_completeness_blocks(policy)
@@ -301,6 +314,25 @@ def _unique_text(values: list[str], *, upper: bool) -> list[str]:
 
 def _unique_order_type(values: list[str]) -> list[str]:
     return _unique_text([value.lower().replace("-", "_") for value in values], upper=False)
+
+
+def _unique_lower_text(values: list[str]) -> list[str]:
+    return _unique_text([value.lower().replace("-", "_") for value in values], upper=False)
+
+
+def _symbol_notional_limits(values: list[str]):
+    from decimal import Decimal
+
+    result = {}
+    for value in values:
+        if "=" not in value:
+            raise ValueError("max-symbol-notional must use SYMBOL=VALUE format")
+        symbol, limit = value.split("=", 1)
+        normalized_symbol = symbol.strip().upper()
+        if not normalized_symbol or not limit.strip():
+            raise ValueError("max-symbol-notional must use SYMBOL=VALUE format")
+        result[normalized_symbol] = Decimal(limit.strip())
+    return result
 
 
 def _read_json_object(path: Path, label: str) -> dict[str, object]:

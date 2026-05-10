@@ -17,6 +17,9 @@ from ytm_executor.state import DEFAULT_HOME
 DEFAULT_RISK_POLICY_FILE = DEFAULT_HOME / "risk-policy.json"
 DEFAULT_RISK_STATE_FILE = DEFAULT_HOME / "risk-state.json"
 SUPPORTED_ORDER_TYPES = frozenset({"limit", "market", "stop", "stop_limit", "stop_market"})
+SUPPORTED_MARKETS = frozenset({"usdm_futures"})
+SUPPORTED_MARGIN_MODES = frozenset({"cross", "isolated"})
+SUPPORTED_POSITION_MODES = frozenset({"one_way"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,12 +28,16 @@ class RiskPolicy:
     enabled: bool
     kill_switch: bool
     paper_only: bool
+    allowed_markets: tuple[str, ...]
+    allowed_margin_modes: tuple[str, ...]
     allowed_symbols: tuple[str, ...]
     allowed_order_types: tuple[str, ...]
     max_order_notional: Decimal | None
     max_position_notional: Decimal | None
+    max_symbol_notional: dict[str, Decimal]
     max_daily_loss: Decimal | None
     max_leverage: Decimal
+    position_mode: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,12 +58,16 @@ def missing_risk_policy() -> RiskPolicy:
         enabled=False,
         kill_switch=True,
         paper_only=True,
+        allowed_markets=(),
+        allowed_margin_modes=(),
         allowed_symbols=(),
         allowed_order_types=(),
         max_order_notional=None,
         max_position_notional=None,
+        max_symbol_notional={},
         max_daily_loss=None,
         max_leverage=Decimal("1"),
+        position_mode="one_way",
     )
 
 
@@ -75,6 +86,8 @@ def read_risk_policy(path: Path) -> RiskPolicy:
         enabled=_bool(payload, "enabled", default=True),
         kill_switch=_bool(payload, "killSwitch", default=True),
         paper_only=_bool(payload, "paperOnly", default=True),
+        allowed_markets=_normalized_lower_text_tuple(payload.get("allowedMarkets")),
+        allowed_margin_modes=_normalized_lower_text_tuple(payload.get("allowedMarginModes")),
         allowed_symbols=_normalized_text_tuple(payload.get("allowedSymbols"), upper=True),
         allowed_order_types=_normalized_order_types(payload.get("allowedOrderTypes")),
         max_order_notional=_optional_decimal(payload.get("maxOrderNotional"), "maxOrderNotional"),
@@ -82,8 +95,13 @@ def read_risk_policy(path: Path) -> RiskPolicy:
             payload.get("maxPositionNotional"),
             "maxPositionNotional",
         ),
+        max_symbol_notional=_normalized_symbol_decimal_map(
+            payload.get("maxSymbolNotional"),
+            "maxSymbolNotional",
+        ),
         max_daily_loss=_optional_decimal(payload.get("maxDailyLoss"), "maxDailyLoss"),
         max_leverage=_positive_decimal(payload.get("maxLeverage", "1"), "maxLeverage"),
+        position_mode=_normalized_lower_text(payload.get("positionMode"), default="one_way"),
     )
     errors = policy_configuration_errors(policy)
     if errors:
@@ -124,11 +142,18 @@ def read_risk_state(path: Path) -> RiskState:
 def risk_policy_to_file_payload(policy: RiskPolicy) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "allowedOrderTypes": list(policy.allowed_order_types),
+        "allowedMarkets": list(policy.allowed_markets),
+        "allowedMarginModes": list(policy.allowed_margin_modes),
         "allowedSymbols": list(policy.allowed_symbols),
         "enabled": policy.enabled,
         "killSwitch": policy.kill_switch,
+        "maxSymbolNotional": {
+            symbol: _decimal_text(value)
+            for symbol, value in sorted(policy.max_symbol_notional.items())
+        },
         "maxLeverage": _decimal_text(policy.max_leverage),
         "paperOnly": policy.paper_only,
+        "positionMode": policy.position_mode,
         "version": 1,
     }
     if policy.max_order_notional is not None:
@@ -143,6 +168,8 @@ def risk_policy_to_file_payload(policy: RiskPolicy) -> dict[str, Any]:
 def risk_policy_public_summary(policy: RiskPolicy) -> dict[str, Any]:
     payload = {
         "allowedOrderTypeCount": len(policy.allowed_order_types),
+        "allowedMarketCount": len(policy.allowed_markets),
+        "allowedMarginModeCount": len(policy.allowed_margin_modes),
         "allowedSymbolCount": len(policy.allowed_symbols),
         "configured": policy.configured,
         "enabled": policy.enabled,
@@ -151,8 +178,10 @@ def risk_policy_public_summary(policy: RiskPolicy) -> dict[str, Any]:
             "maxDailyLoss": policy.max_daily_loss is not None,
             "maxOrderNotional": policy.max_order_notional is not None,
             "maxPositionNotional": policy.max_position_notional is not None,
+            "maxSymbolNotionalCount": len(policy.max_symbol_notional),
         },
         "paperOnly": policy.paper_only,
+        "positionMode": policy.position_mode,
     }
     reject_secret_fields(payload)
     return payload
@@ -200,6 +229,23 @@ def evaluate_command_risk(
     if policy.max_order_notional is not None and order_notional > policy.max_order_notional:
         return _block("risk_order_notional_exceeded", "command order notional exceeds local limit")
 
+    market = _normalized_lower_text(
+        _first(command, payload, ("market", "brokerMarket", "exchangeMarket")),
+        default="",
+    )
+    if not market:
+        return _block("risk_market_missing", "command market is missing")
+    if market not in policy.allowed_markets:
+        return _block("risk_market_not_allowed", "command market is not allowed locally")
+    futures_block = _evaluate_futures_risk(
+        command=command,
+        payload=payload,
+        market=market,
+        policy=policy,
+    )
+    if futures_block is not None:
+        return futures_block
+
     projected_position = _optional_positive_command_decimal(
         _first(
             command,
@@ -224,6 +270,12 @@ def evaluate_command_risk(
         return _block(
             "risk_projected_position_exceeded",
             "command projected position exceeds local limit",
+        )
+    symbol_limit = policy.max_symbol_notional.get(symbol)
+    if symbol_limit is not None and projected_position > symbol_limit:
+        return _block(
+            "risk_symbol_position_exceeded",
+            "command projected symbol position exceeds local limit",
         )
 
     leverage = _optional_positive_command_decimal(
@@ -252,6 +304,14 @@ def policy_configuration_errors(policy: RiskPolicy) -> list[str]:
         errors.extend(policy_completeness_blocks(policy))
     if policy.max_leverage <= 0:
         errors.append("maxLeverage must be positive")
+    invalid_markets = sorted(set(policy.allowed_markets) - SUPPORTED_MARKETS)
+    if invalid_markets:
+        errors.append(f"unsupported markets: {', '.join(invalid_markets)}")
+    invalid_margin_modes = sorted(set(policy.allowed_margin_modes) - SUPPORTED_MARGIN_MODES)
+    if invalid_margin_modes:
+        errors.append(f"unsupported margin modes: {', '.join(invalid_margin_modes)}")
+    if policy.position_mode not in SUPPORTED_POSITION_MODES:
+        errors.append(f"unsupported position mode: {policy.position_mode}")
     invalid_types = sorted(set(policy.allowed_order_types) - SUPPORTED_ORDER_TYPES)
     if invalid_types:
         errors.append(f"unsupported order types: {', '.join(invalid_types)}")
@@ -262,11 +322,16 @@ def policy_configuration_errors(policy: RiskPolicy) -> list[str]:
     ):
         if value is not None and value <= 0:
             errors.append(f"{field_name} must be positive")
+    for symbol, value in policy.max_symbol_notional.items():
+        if value <= 0:
+            errors.append(f"maxSymbolNotional.{symbol} must be positive")
     return errors
 
 
 def policy_completeness_blocks(policy: RiskPolicy) -> list[str]:
     blocks = []
+    if not policy.allowed_markets:
+        blocks.append("local risk policy requires allowedMarkets before execution")
     if not policy.allowed_symbols:
         blocks.append("local risk policy requires allowedSymbols before execution")
     if not policy.allowed_order_types:
@@ -277,11 +342,74 @@ def policy_completeness_blocks(policy: RiskPolicy) -> list[str]:
         blocks.append("local risk policy requires maxPositionNotional before execution")
     if policy.max_daily_loss is None:
         blocks.append("local risk policy requires maxDailyLoss before execution")
+    if "usdm_futures" in policy.allowed_markets:
+        if not policy.allowed_margin_modes:
+            blocks.append("local futures risk policy requires allowedMarginModes before execution")
+        if policy.position_mode != "one_way":
+            blocks.append("local futures risk policy supports one_way positionMode only")
+        missing_symbol_limits = [
+            symbol for symbol in policy.allowed_symbols if symbol not in policy.max_symbol_notional
+        ]
+        if missing_symbol_limits:
+            blocks.append(
+                "local futures risk policy requires maxSymbolNotional for every allowed symbol"
+            )
     return blocks
 
 
 def _block(reason_code: str, reason: str) -> RiskDecision:
     return RiskDecision(passed=False, reason_code=reason_code, reason=reason)
+
+
+def _evaluate_futures_risk(
+    *,
+    command: dict[str, Any],
+    payload: dict[str, Any],
+    market: str,
+    policy: RiskPolicy,
+) -> RiskDecision | None:
+    if market != "usdm_futures":
+        return None
+    if policy.position_mode != "one_way":
+        return _block(
+            "risk_futures_position_mode_unsupported",
+            "local position mode is unsupported",
+        )
+    margin_mode = _normalized_lower_text(
+        _first(command, payload, ("marginMode", "marginType")),
+        default="",
+    )
+    if not margin_mode:
+        return _block("risk_futures_margin_mode_missing", "command futures margin mode is missing")
+    if margin_mode not in policy.allowed_margin_modes:
+        return _block(
+            "risk_futures_margin_mode_not_allowed",
+            "command futures margin mode is not allowed locally",
+        )
+    command_position_mode = _normalized_lower_text(
+        _first(command, payload, ("positionMode",)),
+        default=policy.position_mode,
+    )
+    if command_position_mode != policy.position_mode:
+        return _block(
+            "risk_futures_position_mode_mismatch",
+            "command futures position mode does not match local policy",
+        )
+    if _bool_like(_first(command, payload, ("closePosition",))) is True:
+        return _block("risk_futures_close_position_unsupported", "closePosition is not enabled")
+    reduce_only = _bool_like(_first(command, payload, ("reduceOnly",)))
+    position_effect = _normalized_lower_text(
+        _first(command, payload, ("positionEffect", "effect")),
+        default="",
+    )
+    if position_effect == "open" and reduce_only is True:
+        return _block("risk_futures_reduce_only_open", "open commands cannot be reduceOnly")
+    if position_effect in {"reduce", "close"} and reduce_only is False:
+        return _block(
+            "risk_futures_reduce_only_required",
+            "reduce/close commands cannot disable reduceOnly",
+        )
+    return None
 
 
 def _command_payload(command: dict[str, Any]) -> dict[str, Any]:
@@ -343,6 +471,21 @@ def _normalized_text_tuple(value: object, *, upper: bool) -> tuple[str, ...]:
     return tuple(result)
 
 
+def _normalized_lower_text_tuple(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError("risk policy list fields must be string arrays")
+    result: list[str] = []
+    seen = set()
+    for item in value:
+        normalized = _normalized_lower_text(item, default="")
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            result.append(normalized)
+    return tuple(result)
+
+
 def _normalized_order_types(value: object) -> tuple[str, ...]:
     if value is None:
         return ()
@@ -356,6 +499,38 @@ def _normalized_order_types(value: object) -> tuple[str, ...]:
             seen.add(normalized)
             result.append(normalized)
     return tuple(result)
+
+
+def _normalized_symbol_decimal_map(value: object, field_name: str) -> dict[str, Decimal]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be an object")
+    result: dict[str, Decimal] = {}
+    for raw_symbol, raw_limit in value.items():
+        if not isinstance(raw_symbol, str) or not raw_symbol.strip():
+            raise ValueError(f"{field_name} symbols must be strings")
+        symbol = raw_symbol.strip().upper()
+        result[symbol] = _positive_decimal(raw_limit, f"{field_name}.{symbol}")
+    return result
+
+
+def _normalized_lower_text(value: object, *, default: str) -> str:
+    if value is None:
+        return default
+    return str(value).strip().lower().replace("-", "_") if isinstance(value, str) else default
+
+
+def _bool_like(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes"}:
+            return True
+        if normalized in {"false", "0", "no"}:
+            return False
+    return None
 
 
 def _bool(payload: dict[str, Any], key: str, *, default: bool) -> bool:

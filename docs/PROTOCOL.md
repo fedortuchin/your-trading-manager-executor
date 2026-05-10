@@ -34,7 +34,7 @@ Heartbeat may report non-secret local credential metadata:
 
 ```json
 {
-  "clientVersion": "0.4.0",
+  "clientVersion": "0.5.0",
   "heartbeatStatus": "online",
   "capabilities": {
     "leases": true,
@@ -75,8 +75,8 @@ YTM returns either `item: null` or one command for the executor's broker account
 
 The executor repeats local checks after leasing. A provider-backed command is rejected locally when
 the local risk policy is missing, disabled, incomplete, kill-switched, paper-only for `real`, or the
-command violates local instrument, order type, notional, projected position, daily loss, or leverage
-limits.
+command violates local market, margin mode, instrument, order type, notional, projected position,
+per-symbol exposure, daily loss, leverage, position mode, or reduce-only limits.
 
 After risk preflight, the executor normalizes the command into a broker adapter order request. The
 request must include provider, symbol, side, position effect, order type, quantity or notional, and
@@ -87,8 +87,9 @@ reports `order_placement_skipped`.
 For Binance `real`, a command may explicitly request
 `commandPayload.adapter=binance_usdm_futures_mainnet_order_test`. The executor then uses the local
 Binance credential and the official `binance-sdk-derivatives-trading-usds-futures` package to call
-USD-M Futures mainnet `test_order`. This is a validation-only broker call and does not place an
-order; after the validate-only call, the executor still rejects placement with
+USD-M Futures mainnet `exchangeInfo`, normalize price/quantity to symbol filters, check min/max
+quantity, price, and notional, and call `test_order`. This is a validation-only broker call and
+does not place an order; after the validate-only call, the executor still rejects placement with
 `real_execution_disabled` until real order adapters are explicitly enabled.
 
 ## Result

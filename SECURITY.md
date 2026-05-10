@@ -52,8 +52,8 @@ Known limits:
   formal proof that arbitrary text payloads cannot contain secrets;
 - users should harden SSH access, backups, host firewall rules, and broker-side API restrictions;
 - no real broker order adapters are enabled in the current foundation build.
-- the Binance USD-M Futures mainnet adapter calls `test_order`, not `new_order`, and is
-  validation-only.
+- the Binance USD-M Futures mainnet adapter reads `exchangeInfo`, normalizes the order locally, and
+  calls `test_order`, not `new_order`; it is validation-only.
 - local preflight currently rejects all `real` commands even if YTM leases one by mistake.
 - missing, disabled, incomplete, or kill-switched local risk policy rejects provider-backed
   commands before any adapter can run.

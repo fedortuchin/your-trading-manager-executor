@@ -335,6 +335,8 @@ def _leased_command(*, provider: str, execution_mode: str) -> dict[str, object]:
             "clientOrderId": "ytm_command_1",
             "commandPayload": {
                 "leverage": "1",
+                "marginMode": "cross",
+                "market": "usdm_futures",
                 "orderNotional": "100",
                 "orderType": "limit",
                 "positionEffect": "open",
@@ -380,12 +382,16 @@ def _risk_policy(*, kill_switch: bool = False, paper_only: bool = True) -> RiskP
         enabled=True,
         kill_switch=kill_switch,
         paper_only=paper_only,
+        allowed_markets=("usdm_futures",),
+        allowed_margin_modes=("cross",),
         allowed_symbols=("BTCUSDT",),
         allowed_order_types=("limit",),
         max_order_notional=Decimal("1000"),
         max_position_notional=Decimal("5000"),
+        max_symbol_notional={"BTCUSDT": Decimal("5000")},
         max_daily_loss=Decimal("250"),
         max_leverage=Decimal("1"),
+        position_mode="one_way",
     )
 
 
