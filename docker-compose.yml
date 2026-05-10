@@ -2,7 +2,7 @@ name: ytm-executor
 
 services:
   ytm-executor:
-    image: ghcr.io/fedortuchin/your-trading-manager-executor:v0.3.0
+    image: ghcr.io/fedortuchin/your-trading-manager-executor:v0.4.0
     restart: unless-stopped
     command: run
     read_only: true

@@ -126,8 +126,8 @@ wheels = [
 ]
 
 [[package]]
-name = "binance-sdk-spot"
-version = "8.4.0"
+name = "binance-sdk-derivatives-trading-usds-futures"
+version = "10.2.0"
 source = { registry = "https://opensource.tbank.ru/api/v4/projects/238/packages/pypi/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -138,9 +138,9 @@ dependencies = [
     { name = "websocket-client" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0e/46/7727e0974cd863df1221438c43123d0f5b17bad5b250f5e3a1fbed9f6e19/binance_sdk_spot-8.4.0.tar.gz", hash = "sha256:8622e7e02c771b19682e8ed569e5253eec513c8bf577fc56f6aeac5e7e5f20b2", size = 172253, upload-time = "2026-04-29T14:27:16.187Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2e/c8/5d6f9eaad2e085935b1dccb314d80006d92b0aa9d226cdb468e42b1718a6/binance_sdk_derivatives_trading_usds_futures-10.2.0.tar.gz", hash = "sha256:4feea5585861cb5b61bb91208b1386053fb30ee28209651c2fd666b36d48ec7c", size = 147456, upload-time = "2026-04-29T14:24:28.994Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e1/c4/f8a444f6cc529fc37a8c6aefb50fee14e6838486c6f69a2e9f3078feba5f/binance_sdk_spot-8.4.0-py3-none-any.whl", hash = "sha256:9141c3f2a6fddedec5a8fb29aa365496b6022bf65cc7628cf6aa365d830fca35", size = 740326, upload-time = "2026-04-29T14:27:17.552Z" },
+    { url = "https://files.pythonhosted.org/packages/a7/8e/5931b9050ba59e0aac3d44bb451413a0dafd695021cf3359c591ccd953e4/binance_sdk_derivatives_trading_usds_futures-10.2.0-py3-none-any.whl", hash = "sha256:5d2711e0cc0617d30b2cc388bddfa97b8719bb4f395917a03a29517e3f094263", size = 567807, upload-time = "2026-04-29T14:24:30.724Z" },
 ]
 
 [[package]]
@@ -1023,10 +1023,10 @@ wheels = [
 
 [[package]]
 name = "ytm-executor"
-version = "0.3.0"
+version = "0.4.0"
 source = { editable = "." }
 dependencies = [
-    { name = "binance-sdk-spot" },
+    { name = "binance-sdk-derivatives-trading-usds-futures" },
     { name = "cryptography" },
     { name = "t-tech-investments" },
 ]
@@ -1039,7 +1039,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "binance-sdk-spot", specifier = "==8.4.0" },
+    { name = "binance-sdk-derivatives-trading-usds-futures", specifier = "==10.2.0" },
     { name = "cryptography", specifier = ">=48.0.0" },
     { name = "t-tech-investments", specifier = ">=0.3.3", index = "https://opensource.tbank.ru/api/v4/projects/238/packages/pypi/simple" },
 ]

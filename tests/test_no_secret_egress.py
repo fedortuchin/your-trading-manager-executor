@@ -110,11 +110,12 @@ def test_validated_broker_secret_is_not_sent_to_ytm(tmp_path: Path) -> None:
     broker_transport = BrokerCaptureTransport(
         responses=[
             {
-                "accountType": "SPOT",
+                "assets": [{"asset": "USDT"}],
                 "canTrade": True,
                 "canWithdraw": False,
-                "permissions": ["SPOT"],
-                "uid": 123456,
+                "feeTier": 0,
+                "multiAssetsMargin": False,
+                "positions": [{"symbol": "BTCUSDT"}],
             }
         ]
     )

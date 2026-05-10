@@ -6,6 +6,7 @@ from typing import Any
 
 import ytm_executor.preflight as preflight_module
 from ytm_executor.adapters import BrokerAdapterResult
+from ytm_executor.binance_futures import BINANCE_USDM_FUTURES_MAINNET_ORDER_TEST_ADAPTER
 from ytm_executor.preflight import preflight_command
 from ytm_executor.risk import RiskPolicy, RiskState
 from ytm_executor.secret_store import CredentialSummary
@@ -220,9 +221,11 @@ def test_preflight_rejects_invalid_adapter_order_request() -> None:
     assert decision.result_payload["riskPreflight"] == "passed"
 
 
-def test_preflight_binance_testnet_adapter_requires_local_secret() -> None:
+def test_preflight_binance_futures_adapter_requires_real_mode() -> None:
     command = _leased_command(provider="binance", execution_mode="external_paper")
-    command["command"]["commandPayload"]["adapter"] = "binance_spot_testnet_order_test"
+    command["command"]["commandPayload"]["adapter"] = (
+        BINANCE_USDM_FUTURES_MAINNET_ORDER_TEST_ADAPTER
+    )
 
     decision = preflight_command(
         command,
@@ -239,12 +242,42 @@ def test_preflight_binance_testnet_adapter_requires_local_secret() -> None:
     assert decision.result_payload["preflightReasonCode"] == "adapter_preflight_failed"
 
 
-def test_preflight_binance_testnet_adapter_returns_sanitized_result(monkeypatch) -> None:
-    command = _leased_command(provider="binance", execution_mode="external_paper")
-    command["command"]["commandPayload"]["adapter"] = "binance_spot_testnet_order_test"
+def test_preflight_binance_futures_adapter_requires_local_secret() -> None:
+    command = _leased_command(provider="binance", execution_mode="real")
+    command["command"]["commandPayload"]["adapter"] = (
+        BINANCE_USDM_FUTURES_MAINNET_ORDER_TEST_ADAPTER
+    )
+
+    decision = preflight_command(
+        command,
+        local_credentials=(CredentialSummary(provider="binance", name="main"),),
+        risk_policy=_risk_policy(paper_only=False),
+        risk_state=_risk_state(),
+        validation_summaries=(
+            _validation(
+                provider="binance",
+                checked_at="2026-05-10T10:00:00Z",
+                trading_allowed=True,
+            ),
+        ),
+        now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
+    )
+
+    assert decision.status == "rejected"
+    assert decision.result_payload["preflightReasonCode"] == "adapter_preflight_failed"
+
+
+def test_preflight_binance_futures_validate_only_then_rejects_real_placement(
+    monkeypatch,
+) -> None:
+    command = _leased_command(provider="binance", execution_mode="real")
+    command["command"]["commandPayload"]["adapter"] = (
+        BINANCE_USDM_FUTURES_MAINNET_ORDER_TEST_ADAPTER
+    )
+    command["command"]["commandPayload"]["quantity"] = "0.01"
     seen: dict[str, Any] = {}
 
-    class FakeBinanceAdapter:
+    class FakeBinanceFuturesAdapter:
         def __init__(self, *, api_key: str, api_secret: str) -> None:
             seen["api_key"] = api_key
             seen["api_secret"] = api_secret
@@ -254,18 +287,19 @@ def test_preflight_binance_testnet_adapter_returns_sanitized_result(monkeypatch)
             return BrokerAdapterResult(
                 status="acknowledged",
                 payload={
-                    "adapter": "binance_spot_testnet_order_test",
+                    "adapter": BINANCE_USDM_FUTURES_MAINNET_ORDER_TEST_ADAPTER,
                     "clientOrderId": request.client_order_id,
                     "executorAction": "order_test_validated",
+                    "mainnet": True,
+                    "market": "usdm_futures",
                     "provider": "binance",
-                    "testnet": True,
                 },
             )
 
     monkeypatch.setattr(
         preflight_module,
-        "BinanceSpotTestnetOrderTestAdapter",
-        FakeBinanceAdapter,
+        "BinanceUsdmFuturesMainnetOrderTestAdapter",
+        FakeBinanceFuturesAdapter,
     )
 
     decision = preflight_command(
@@ -275,15 +309,21 @@ def test_preflight_binance_testnet_adapter_returns_sanitized_result(monkeypatch)
             "apiKey": f"{provider}-{name}-public",
             "apiSecret": "binance-private-secret",
         },
-        risk_policy=_risk_policy(),
+        risk_policy=_risk_policy(paper_only=False),
         risk_state=_risk_state(),
         validation_summaries=(
-            _validation(provider="binance", checked_at="2026-05-10T10:00:00Z"),
+            _validation(
+                provider="binance",
+                checked_at="2026-05-10T10:00:00Z",
+                trading_allowed=True,
+            ),
         ),
         now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
     )
 
-    assert decision.status == "acknowledged"
+    assert decision.status == "rejected"
+    assert decision.result_payload["preflightReasonCode"] == "real_execution_disabled"
+    assert decision.result_payload["adapterPreflight"] == "passed"
     assert decision.result_payload["adapterResult"]["executorAction"] == "order_test_validated"
     assert seen["api_secret"] == "binance-private-secret"
     assert "binance-private-secret" not in repr(decision.result_payload)

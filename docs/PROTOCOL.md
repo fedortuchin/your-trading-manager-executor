@@ -34,7 +34,7 @@ Heartbeat may report non-secret local credential metadata:
 
 ```json
 {
-  "clientVersion": "0.3.0",
+  "clientVersion": "0.4.0",
   "heartbeatStatus": "online",
   "capabilities": {
     "leases": true,
@@ -84,10 +84,12 @@ a deterministic `clientOrderId`. If YTM did not provide `clientOrderId`, the exe
 bounded id from provider plus command id. The current foundation build uses a disabled adapter and
 reports `order_placement_skipped`.
 
-For Binance `external_paper`, a command may explicitly request
-`commandPayload.adapter=binance_spot_testnet_order_test`. The executor then uses the local Binance
-credential and the official `binance-sdk-spot` package to call Spot Testnet `order_test`. This is a
-validation-only broker call and does not place an order.
+For Binance `real`, a command may explicitly request
+`commandPayload.adapter=binance_usdm_futures_mainnet_order_test`. The executor then uses the local
+Binance credential and the official `binance-sdk-derivatives-trading-usds-futures` package to call
+USD-M Futures mainnet `test_order`. This is a validation-only broker call and does not place an
+order; after the validate-only call, the executor still rejects placement with
+`real_execution_disabled` until real order adapters are explicitly enabled.
 
 ## Result
 

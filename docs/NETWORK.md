@@ -10,14 +10,14 @@ Current foundation build:
   - default production: `https://trademate.pro`
   - custom deployments: the host passed to `ytm-executor enroll --server-url`
 - Optional validate-only broker API egress when the user runs `ytm-executor broker validate`:
-  - Binance REST: `https://api.binance.com`
+  - Binance USD-M Futures REST: `https://fapi.binance.com`
   - T-Bank Invest gRPC: `invest-public-api.tinkoff.ru:443`
-- Optional Binance external-paper adapter egress when a command explicitly requests
-  `binance_spot_testnet_order_test`:
-  - Binance Spot Testnet REST: `https://testnet.binance.vision`
+- Optional Binance real-mode validate-only adapter egress when a command explicitly requests
+  `binance_usdm_futures_mainnet_order_test`:
+  - Binance USD-M Futures mainnet REST: `https://fapi.binance.com`
 - Continuous `ytm-executor run` only needs the configured YTM server until real broker adapters are
-  enabled, except for explicit external-paper adapter calls such as Binance Spot Testnet
-  `order_test`.
+  enabled, except for explicit validate-only adapter calls such as Binance USD-M Futures mainnet
+  `test_order`.
 - Reconciliation snapshot upload sends sanitized provider state only to the configured YTM server.
 - Local risk policy and risk state are read from the executor host filesystem and do not require
   network access. YTM receives only sanitized risk summary counts and mode flags in heartbeat.
@@ -49,8 +49,9 @@ selected broker API domains. Expected examples:
 
 - Binance: Binance REST/WebSocket API domains configured for the selected market and account type.
   Future Binance adapters should use the official Binance Python connector repository behind the
-  executor adapter boundary. The current Binance Spot Testnet adapter uses the official
-  `binance-sdk-spot==8.4.0` package and calls `order_test`, not `new_order`.
+  executor adapter boundary. The current Binance USD-M Futures mainnet adapter uses the official
+  `binance-sdk-derivatives-trading-usds-futures==10.2.0` package and calls `test_order`, not
+  `new_order`.
 - T-Bank Invest: T-Bank Invest API endpoints configured by the adapter.
 
 Broker API hosts must be explicit adapter configuration, not YTM-provided secret-bearing payloads.

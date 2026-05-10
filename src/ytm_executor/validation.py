@@ -97,7 +97,7 @@ def _validate_binance(
         query.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
-    url = f"https://api.binance.com/api/v3/account?{query}&signature={signature}"
+    url = f"https://fapi.binance.com/fapi/v3/account?{query}&signature={signature}"
     try:
         payload = transport.get_json(
             url=url,
@@ -114,15 +114,19 @@ def _validate_binance(
 
     can_trade = payload.get("canTrade") is True
     can_withdraw = payload.get("canWithdraw") is True
-    market_permissions = payload.get("permissions")
-    if not isinstance(market_permissions, list):
-        market_permissions = []
-    account_type = str(payload.get("accountType") or "unknown")
-    uid = str(payload.get("uid") or "")
+    assets = payload.get("assets")
+    if not isinstance(assets, list):
+        assets = []
+    positions = payload.get("positions")
+    if not isinstance(positions, list):
+        positions = []
+    account_type = "USDS_M_FUTURES"
     fingerprint_parts = [
-        uid,
         account_type,
-        ",".join(str(item) for item in sorted(market_permissions)),
+        str(payload.get("feeTier") or ""),
+        str(payload.get("multiAssetsMargin") or ""),
+        str(len(assets)),
+        str(len(positions)),
         str(can_trade),
     ]
     warnings = []
@@ -141,7 +145,9 @@ def _validate_binance(
             "tradingAllowed": can_trade,
             "withdrawalsAllowed": can_withdraw,
             "brokerAccountType": account_type,
-            "marketPermissionCount": len(market_permissions),
+            "market": "usdm_futures",
+            "assetCount": len(assets),
+            "positionCount": len(positions),
         },
         warnings=warnings,
     )

@@ -8,9 +8,9 @@ from datetime import UTC, datetime
 from typing import Any
 
 from ytm_executor.adapters import DisabledBrokerAdapter, build_order_request
-from ytm_executor.binance_spot import (
-    BINANCE_SPOT_TESTNET_ORDER_TEST_ADAPTER,
-    BinanceSpotTestnetOrderTestAdapter,
+from ytm_executor.binance_futures import (
+    BINANCE_USDM_FUTURES_MAINNET_ORDER_TEST_ADAPTER,
+    BinanceUsdmFuturesMainnetOrderTestAdapter,
 )
 from ytm_executor.guards import SecretFieldError, reject_secret_fields
 from ytm_executor.risk import (
@@ -91,7 +91,10 @@ def preflight_command(
             str(exc),
             extra={"adapterPreflight": "failed", "riskPreflight": "passed"},
         )
-    if execution_mode == "real":
+    if (
+        execution_mode == "real"
+        and _adapter_name(command) != BINANCE_USDM_FUTURES_MAINNET_ORDER_TEST_ADAPTER
+    ):
         return _reject(
             "real_execution_disabled",
             "real execution is disabled in this executor build",
@@ -100,6 +103,7 @@ def preflight_command(
     try:
         adapter = _adapter_for_command(
             command,
+            execution_mode=execution_mode,
             provider=provider,
             local_secret_resolver=local_secret_resolver,
         )
@@ -109,6 +113,16 @@ def preflight_command(
             "adapter_preflight_failed",
             str(exc),
             extra={"adapterPreflight": "failed", "riskPreflight": "passed"},
+        )
+    if execution_mode == "real":
+        return _reject(
+            "real_execution_disabled",
+            "real order placement is disabled in this executor build after validate-only preflight",
+            extra={
+                "adapterPreflight": "passed",
+                "adapterResult": adapter_result.payload,
+                "riskPreflight": "passed",
+            },
         )
     return _acknowledge_without_order_placement(
         adapter_payload=adapter_result.payload,
@@ -215,23 +229,28 @@ def _decision(*, status: str, result_payload: dict[str, Any]) -> CommandPrefligh
 def _adapter_for_command(
     command: dict[str, Any],
     *,
+    execution_mode: str,
     provider: str,
     local_secret_resolver: Callable[[str, str], dict[str, str]] | None,
 ):
     adapter_name = _adapter_name(command)
-    if adapter_name != BINANCE_SPOT_TESTNET_ORDER_TEST_ADAPTER:
+    if adapter_name != BINANCE_USDM_FUTURES_MAINNET_ORDER_TEST_ADAPTER:
         return DisabledBrokerAdapter(provider=provider)
     if provider != "binance":
-        raise ValueError("Binance Spot testnet adapter requires provider=binance")
+        raise ValueError("Binance Futures mainnet adapter requires provider=binance")
+    if execution_mode != "real":
+        raise ValueError("Binance Futures mainnet order test requires executionMode=real")
     if local_secret_resolver is None:
-        raise ValueError("local Binance credential is required for testnet adapter")
+        raise ValueError("local Binance credential is required for Futures mainnet adapter")
     credential_name = _text(command.get("credentialName")) or "main"
     secret = local_secret_resolver(provider, credential_name)
     api_key = _text(secret.get("apiKey"))
     api_secret = _text(secret.get("apiSecret"))
     if not api_key or not api_secret:
-        raise ValueError("local Binance API key and secret are required for testnet adapter")
-    return BinanceSpotTestnetOrderTestAdapter(api_key=api_key, api_secret=api_secret)
+        raise ValueError(
+            "local Binance API key and secret are required for Futures mainnet adapter"
+        )
+    return BinanceUsdmFuturesMainnetOrderTestAdapter(api_key=api_key, api_secret=api_secret)
 
 
 def _adapter_name(command: dict[str, Any]) -> str:
