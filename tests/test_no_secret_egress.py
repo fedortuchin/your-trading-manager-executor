@@ -215,3 +215,41 @@ def test_client_rejects_secret_like_command_result() -> None:
             status="acknowledged",
             result_payload={"token": "must-not-send"},
         )
+
+
+def test_client_records_sanitized_reconciliation_snapshot() -> None:
+    transport = CaptureTransport(
+        responses=[{"snapshot": {"id": "snapshot-1", "status": "ok"}}]
+    )
+    client = YtmClient(
+        allowed_hosts=("ytm.example.test",),
+        server_url="https://ytm.example.test",
+        transport=transport,
+    )
+
+    response = client.record_reconciliation_snapshot(
+        access_token="ytm_exec_access",
+        execution_mode="external_paper",
+        payload={"orders": [], "positions": []},
+        snapshot_type="full",
+        status="ok",
+    )
+
+    assert response["snapshot"]["status"] == "ok"
+    assert transport.requests[0]["payload"]["payload"] == {"orders": [], "positions": []}
+
+
+def test_client_rejects_secret_like_reconciliation_snapshot() -> None:
+    client = YtmClient(
+        allowed_hosts=("ytm.example.test",),
+        server_url="https://ytm.example.test",
+        transport=CaptureTransport(responses=[]),
+    )
+
+    with pytest.raises(SecretFieldError):
+        client.record_reconciliation_snapshot(
+            access_token="ytm_exec_access",
+            payload={"orders": [{"apiSecret": "must-not-send"}]},
+            snapshot_type="full",
+            status="ok",
+        )

@@ -83,6 +83,18 @@ def main(argv: list[str] | None = None) -> int:
     risk_init.add_argument("--kill-switch-off", action="store_true")
     risk_init.add_argument("--force", action="store_true")
 
+    reconciliation_parser = subparsers.add_parser("reconciliation")
+    reconciliation_subparsers = reconciliation_parser.add_subparsers(
+        dest="reconciliation_command",
+        required=True,
+    )
+    reconciliation_upload = reconciliation_subparsers.add_parser("upload-snapshot")
+    reconciliation_upload.add_argument("--snapshot-type", required=True)
+    reconciliation_upload.add_argument("--status", required=True)
+    reconciliation_upload.add_argument("--payload-file", required=True)
+    reconciliation_upload.add_argument("--execution-mode")
+    reconciliation_upload.add_argument("--provider-snapshot-id")
+
     args = parser.parse_args(argv)
     try:
         if args.command == "enroll":
@@ -93,6 +105,8 @@ def main(argv: list[str] | None = None) -> int:
             return _broker(args)
         if args.command == "risk":
             return _risk(args)
+        if args.command == "reconciliation":
+            return _reconciliation(args)
     except Exception as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -209,6 +223,24 @@ def _risk(args: argparse.Namespace) -> int:
     return 2
 
 
+def _reconciliation(args: argparse.Namespace) -> int:
+    if args.reconciliation_command == "upload-snapshot":
+        state = read_state(Path(args.state_file))
+        client = YtmClient(server_url=state.server_url, allowed_hosts=state.allowed_hosts)
+        payload = _read_json_object(Path(args.payload_file), "payload-file")
+        response = client.record_reconciliation_snapshot(
+            access_token=state.access_token,
+            execution_mode=args.execution_mode,
+            payload=payload,
+            provider_snapshot_id=args.provider_snapshot_id,
+            snapshot_type=args.snapshot_type,
+            status=args.status,
+        )
+        print(json.dumps(response, ensure_ascii=False, sort_keys=True))
+        return 0
+    return 2
+
+
 def _broker_secret(args: argparse.Namespace) -> dict[str, str]:
     if args.provider == "tbank":
         token = args.token or getpass.getpass("T-Bank Invest token: ")
@@ -269,6 +301,13 @@ def _unique_text(values: list[str], *, upper: bool) -> list[str]:
 
 def _unique_order_type(values: list[str]) -> list[str]:
     return _unique_text([value.lower().replace("-", "_") for value in values], upper=False)
+
+
+def _read_json_object(path: Path, label: str) -> dict[str, object]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must contain a JSON object")
+    return value
 
 
 def _store(args: argparse.Namespace) -> LocalSecretStore:

@@ -117,6 +117,31 @@ class YtmClient:
             access_token=access_token,
         )
 
+    def record_reconciliation_snapshot(
+        self,
+        *,
+        access_token: str,
+        snapshot_type: str,
+        status: str,
+        payload: dict[str, Any],
+        execution_mode: str | None = None,
+        provider_snapshot_id: str | None = None,
+    ) -> dict[str, Any]:
+        request_payload: dict[str, Any] = {
+            "payload": payload,
+            "snapshotType": snapshot_type,
+            "status": status,
+        }
+        if execution_mode is not None:
+            request_payload["executionMode"] = execution_mode
+        if provider_snapshot_id is not None:
+            request_payload["providerSnapshotId"] = provider_snapshot_id
+        return self._post(
+            path="/api/executor/reconciliation/snapshots",
+            payload=request_payload,
+            access_token=access_token,
+        )
+
     def _post(
         self,
         *,

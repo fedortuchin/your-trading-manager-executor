@@ -18,6 +18,7 @@ Current foundation build:
 - Continuous `ytm-executor run` only needs the configured YTM server until real broker adapters are
   enabled, except for explicit external-paper adapter calls such as Binance Spot Testnet
   `order_test`.
+- Reconciliation snapshot upload sends sanitized provider state only to the configured YTM server.
 - Local risk policy and risk state are read from the executor host filesystem and do not require
   network access. YTM receives only sanitized risk summary counts and mode flags in heartbeat.
 

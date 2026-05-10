@@ -98,3 +98,21 @@ Authorization: Bearer <executor access token>
 
 Result payload must be sanitized. Secret-like keys are rejected by both executor client and YTM
 server.
+
+## Reconciliation Snapshot
+
+```text
+POST /api/executor/reconciliation/snapshots
+Authorization: Bearer <executor access token>
+```
+
+Request contains:
+
+- `snapshotType`: `account`, `orders`, `fills`, `positions`, or `full`;
+- `status`: `ok`, `drift`, `reconciliation_required`, or `error`;
+- `executionMode`: optional override, otherwise YTM uses the executor's broker account mode;
+- `providerSnapshotId`: optional provider-side snapshot id;
+- `payload`: sanitized provider state.
+
+Broker secrets, API keys, Authorization headers, and token-like fields are rejected before upload.
+The foundation records snapshots and drift status; full provider fill ingestion remains later work.

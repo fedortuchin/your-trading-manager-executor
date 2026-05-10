@@ -26,6 +26,7 @@ Implemented:
   fallback;
 - Binance Spot Testnet `order_test` adapter through the official `binance-sdk-spot` package;
 - command lease polling;
+- sanitized provider reconciliation snapshot upload to YTM;
 - client-side rejection of secret-like fields in YTM API payloads;
 - Docker-first VPS installer;
 - GHCR Docker image build, cosign signing, SBOM generation, and release checksums in CI;
@@ -35,7 +36,7 @@ Not implemented yet:
 
 - Binance/T-Bank real order adapters;
 - real order placement;
-- reconciliation/fill upload.
+- provider fill upload and full reconciliation application.
 
 Binance adapter work uses the official Binance Python connector repository behind the executor
 adapter boundary. The current pinned package is `binance-sdk-spot==8.4.0`. The first adapter calls
@@ -184,6 +185,20 @@ Run continuously:
 ytm-executor run
 ```
 
+Upload a sanitized provider reconciliation snapshot from the executor host:
+
+```bash
+ytm-executor reconciliation upload-snapshot \
+  --snapshot-type full \
+  --status ok \
+  --execution-mode external_paper \
+  --payload-file reconciliation.json
+```
+
+The payload file must be a JSON object without secret-like fields. Current snapshot upload records
+provider state and lets YTM mark drift/reconciliation-required state; provider fill ingestion and
+full automatic state application remain later work.
+
 When a command is leased, the executor runs local preflight before acknowledging anything:
 
 - command payload must not contain secret-like fields;
@@ -209,6 +224,7 @@ YTM Cloud may receive:
 - command lease requests;
 - sanitized execution results.
 - sanitized broker credential validation status.
+- sanitized provider reconciliation snapshots.
 
 YTM Cloud must not receive:
 
