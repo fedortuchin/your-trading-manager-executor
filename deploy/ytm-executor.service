@@ -1,0 +1,21 @@
+[Unit]
+Description=YTM self-hosted executor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ytm-executor
+Group=ytm-executor
+WorkingDirectory=/opt/ytm-executor
+ExecStart=/opt/ytm-executor/.venv/bin/ytm-executor run
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ytm-executor/.ytm-executor
+
+[Install]
+WantedBy=multi-user.target
