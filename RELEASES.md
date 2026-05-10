@@ -31,17 +31,28 @@ sha256sum -c SHA256SUMS
 Verify a signed Docker image after installing `cosign`:
 
 ```bash
-cosign verify ghcr.io/fedortuchin/your-trading-manager-executor:<tag> \
+cosign verify ghcr.io/fedortuchin/your-trading-manager-executor:v0.1.0 \
   --certificate-identity-regexp 'https://github.com/fedortuchin/your-trading-manager-executor/.github/workflows/ci.yml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
+For production installs, prefer a release tag or immutable digest:
+
+```text
+ghcr.io/fedortuchin/your-trading-manager-executor:v0.1.0
+ghcr.io/fedortuchin/your-trading-manager-executor@sha256:<digest>
+```
+
+The Docker digest is shown in the GitHub Actions image job and GHCR package metadata.
+
 ## Publishing
 
-Create a release by pushing a signed version tag:
+Create a release by pushing a version tag. Use `git tag -s` when a maintainer signing key is
+available; otherwise use an annotated tag and rely on cosign-signed Docker images plus release
+checksums.
 
 ```bash
-git tag -s v0.1.0 -m "v0.1.0"
+git tag -a v0.1.0 -m "v0.1.0"
 git push origin v0.1.0
 ```
 

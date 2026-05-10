@@ -40,10 +40,13 @@ Primary controls:
 - Docker runtime uses a non-root user, persistent local volume, dropped Linux capabilities, and
   `no-new-privileges`;
 - release artifacts include SHA256 checksums, image signing, and SBOM output.
+- production installs should pin a release tag or image digest instead of a floating image tag.
 
 Known limits:
 
 - local encrypted storage protects against accidental disclosure, not full compromise of the VPS;
+- the secret-field guard prevents common accidental leaks by checking field names, but it is not a
+  formal proof that arbitrary text payloads cannot contain secrets;
 - users should harden SSH access, backups, host firewall rules, and broker-side API restrictions;
 - no real broker order adapters are enabled in the current foundation build.
 - local preflight currently rejects all `real` commands even if YTM leases one by mistake.
@@ -64,6 +67,7 @@ Users and auditors can verify this by checking:
   `scripts/sign_artifact.sh`.
 - Docker images are published by GitHub Actions, signed with cosign, and accompanied by SBOM output.
 - Network expectations are documented in `docs/NETWORK.md`.
+- The user-facing trust checklist is documented in `TRUST.md`.
 
 ## Reporting
 
