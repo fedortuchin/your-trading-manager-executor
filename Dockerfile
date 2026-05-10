@@ -5,9 +5,9 @@ ENV PYTHONHASHSEED=0 \
     HOME=/home/ytm-executor
 
 WORKDIR /app
-COPY dist/*.whl /tmp/ytm-executor.whl
-RUN pip install --no-cache-dir /tmp/ytm-executor.whl \
-    && rm -f /tmp/ytm-executor.whl \
+COPY dist/*.whl /tmp/ytm-executor-dist/
+RUN pip install --root-user-action=ignore --no-cache-dir /tmp/ytm-executor-dist/*.whl \
+    && rm -rf /tmp/ytm-executor-dist \
     && groupadd --system ytm-executor \
     && useradd --system --create-home --home-dir /home/ytm-executor \
       --gid ytm-executor --shell /usr/sbin/nologin ytm-executor \
