@@ -28,9 +28,35 @@ Not implemented yet:
 
 Prerequisites:
 
-- Python 3.13;
+- Ubuntu/Debian/Fedora-family VPS with `sudo`;
 - outbound access to your YTM server;
 - outbound access to the broker API only when adapters are added.
+
+One-command install from the token shown by YTM:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fedortuchin/your-trading-manager-executor/main/scripts/install.sh | sudo bash -s -- \
+  --server https://your-ytm-domain.example \
+  --enrollment-token ytm_enroll_xxx
+```
+
+This creates a locked-down `ytm-executor` system user, installs Python 3.13 through `uv`, installs
+the executor from this public repository, enrolls it with YTM, and starts the `ytm-executor`
+systemd service.
+
+To add a broker credential during the same install, ask the installer to prompt on the VPS terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fedortuchin/your-trading-manager-executor/main/scripts/install.sh | sudo bash -s -- \
+  --server https://your-ytm-domain.example \
+  --enrollment-token ytm_enroll_xxx \
+  --broker-provider tbank
+```
+
+Do not pass broker tokens in the install command. The installer uses a local terminal prompt, so
+broker secrets are written only into the encrypted local store under `/home/ytm-executor`.
+
+Manual install from a built wheel:
 
 ```bash
 python3.13 -m venv .venv

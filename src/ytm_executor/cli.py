@@ -105,6 +105,7 @@ def _run(args: argparse.Namespace) -> int:
         item = lease_response.get("item")
         if isinstance(item, dict):
             print(json.dumps(item, ensure_ascii=False, sort_keys=True))
+            _acknowledge_without_order_placement(client, state.access_token, item)
         if args.once:
             return 0
         time.sleep(max(1, int(args.interval_seconds)))
@@ -140,6 +141,26 @@ def _store(args: argparse.Namespace) -> LocalSecretStore:
     return LocalSecretStore(
         key_file=Path(args.key_file),
         secrets_file=Path(args.secrets_file),
+    )
+
+
+def _acknowledge_without_order_placement(
+    client: YtmClient,
+    access_token: str,
+    item: dict[str, object],
+) -> None:
+    command = expect_object(item, "command")
+    lease = expect_object(item, "lease")
+    client.record_command_result(
+        access_token=access_token,
+        command_id=_expect_text(command, "id"),
+        lease_id=_expect_text(lease, "id"),
+        status="acknowledged",
+        result_payload={
+            "executorAction": "order_placement_skipped",
+            "reason": "broker adapters are not enabled in this foundation build",
+            "zeroSecret": True,
+        },
     )
 
 

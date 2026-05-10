@@ -98,6 +98,25 @@ class YtmClient:
             access_token=access_token,
         )
 
+    def record_command_result(
+        self,
+        *,
+        access_token: str,
+        command_id: str,
+        lease_id: str,
+        status: str,
+        result_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self._post(
+            path=f"/api/executor/commands/{command_id}/result",
+            payload={
+                "leaseId": lease_id,
+                "resultPayload": result_payload,
+                "status": status,
+            },
+            access_token=access_token,
+        )
+
     def _post(
         self,
         *,

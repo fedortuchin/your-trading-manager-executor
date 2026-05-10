@@ -89,3 +89,44 @@ def test_client_rejects_secret_like_payload_keys() -> None:
             capabilities={"apiSecret": "must-not-send"},
             client_version="test",
         )
+
+
+def test_client_records_sanitized_command_result() -> None:
+    transport = CaptureTransport(
+        responses=[{"command": {"id": "command-1", "status": "acknowledged"}}]
+    )
+    client = YtmClient(
+        allowed_hosts=("ytm.example.test",),
+        server_url="https://ytm.example.test",
+        transport=transport,
+    )
+
+    response = client.record_command_result(
+        access_token="ytm_exec_access",
+        command_id="command-1",
+        lease_id="lease-1",
+        status="acknowledged",
+        result_payload={"executorAction": "order_placement_skipped"},
+    )
+
+    assert response["command"]["status"] == "acknowledged"
+    assert transport.requests[0]["payload"]["resultPayload"] == {
+        "executorAction": "order_placement_skipped"
+    }
+
+
+def test_client_rejects_secret_like_command_result() -> None:
+    client = YtmClient(
+        allowed_hosts=("ytm.example.test",),
+        server_url="https://ytm.example.test",
+        transport=CaptureTransport(responses=[]),
+    )
+
+    with pytest.raises(SecretFieldError):
+        client.record_command_result(
+            access_token="ytm_exec_access",
+            command_id="command-1",
+            lease_id="lease-1",
+            status="acknowledged",
+            result_payload={"token": "must-not-send"},
+        )
