@@ -12,8 +12,12 @@ Current foundation build:
 - Optional validate-only broker API egress when the user runs `ytm-executor broker validate`:
   - Binance REST: `https://api.binance.com`
   - T-Bank Invest gRPC: `invest-public-api.tinkoff.ru:443`
+- Optional Binance external-paper adapter egress when a command explicitly requests
+  `binance_spot_testnet_order_test`:
+  - Binance Spot Testnet REST: `https://testnet.binance.vision`
 - Continuous `ytm-executor run` only needs the configured YTM server until real broker adapters are
-  enabled.
+  enabled, except for explicit external-paper adapter calls such as Binance Spot Testnet
+  `order_test`.
 - Local risk policy and risk state are read from the executor host filesystem and do not require
   network access. YTM receives only sanitized risk summary counts and mode flags in heartbeat.
 
@@ -44,7 +48,8 @@ selected broker API domains. Expected examples:
 
 - Binance: Binance REST/WebSocket API domains configured for the selected market and account type.
   Future Binance adapters should use the official Binance Python connector repository behind the
-  executor adapter boundary.
+  executor adapter boundary. The current Binance Spot Testnet adapter uses the official
+  `binance-sdk-spot==8.4.0` package and calls `order_test`, not `new_order`.
 - T-Bank Invest: T-Bank Invest API endpoints configured by the adapter.
 
 Broker API hosts must be explicit adapter configuration, not YTM-provided secret-bearing payloads.

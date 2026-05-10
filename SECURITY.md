@@ -52,6 +52,7 @@ Known limits:
   formal proof that arbitrary text payloads cannot contain secrets;
 - users should harden SSH access, backups, host firewall rules, and broker-side API restrictions;
 - no real broker order adapters are enabled in the current foundation build.
+- the Binance Spot Testnet adapter calls `order_test`, not `new_order`, and is validation-only.
 - local preflight currently rejects all `real` commands even if YTM leases one by mistake.
 - missing, disabled, incomplete, or kill-switched local risk policy rejects provider-backed
   commands before any adapter can run.

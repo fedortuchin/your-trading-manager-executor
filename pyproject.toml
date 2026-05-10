@@ -9,6 +9,7 @@ description = "Self-hosted zero-secret executor for Your Trading Manager."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "binance-sdk-spot==8.4.0",
     "cryptography>=48.0.0",
     "t-tech-investments>=0.3.3",
 ]

@@ -24,6 +24,7 @@ Implemented:
   type, notional, position, daily loss, and leverage limits;
 - broker adapter boundary with normalized order requests and deterministic `clientOrderId`
   fallback;
+- Binance Spot Testnet `order_test` adapter through the official `binance-sdk-spot` package;
 - command lease polling;
 - client-side rejection of secret-like fields in YTM API payloads;
 - Docker-first VPS installer;
@@ -32,13 +33,14 @@ Implemented:
 
 Not implemented yet:
 
-- Binance/T-Bank order adapters;
+- Binance/T-Bank real order adapters;
 - real order placement;
 - reconciliation/fill upload.
 
-Future Binance order adapters should use the official Binance Python connector repository behind
-the executor adapter boundary. Do not add the dependency until the adapter implementation starts and
-the exact modular package/version is pinned.
+Binance adapter work uses the official Binance Python connector repository behind the executor
+adapter boundary. The current pinned package is `binance-sdk-spot==8.4.0`. The first adapter calls
+Spot Testnet `order_test` only; it validates the order request and does not place an exchange
+order.
 
 ## Install On A VPS
 
@@ -222,8 +224,11 @@ host. Those credentials are never included in YTM API payloads.
 Command preflight is also local and fail-closed: no adapter execution can be added later without
 passing these local checks first. Local risk policy is stored on the executor host and is not
 controlled by YTM Cloud, so a cloud-side command cannot relax the executor's kill switch or limits.
-The adapter boundary currently uses a disabled adapter that prepares a sanitized order request and
-returns `order_placement_skipped`; it does not call a broker.
+The default adapter path currently uses a disabled adapter that prepares a sanitized order request
+and returns `order_placement_skipped`; it does not call a broker. Binance `external_paper` commands
+can request the `binance_spot_testnet_order_test` adapter in `commandPayload.adapter`, which calls
+Binance Spot Testnet `order_test` only and reports `order_test_validated` when Binance accepts the
+test request.
 The secret-field guard prevents common accidental leaks by rejecting secret-like field names; it is
 not a substitute for source review, tests, signed releases, and network allowlisting.
 

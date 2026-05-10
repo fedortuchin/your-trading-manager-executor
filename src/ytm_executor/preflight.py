@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 from ytm_executor.adapters import DisabledBrokerAdapter, build_order_request
+from ytm_executor.binance_spot import (
+    BINANCE_SPOT_TESTNET_ORDER_TEST_ADAPTER,
+    BinanceSpotTestnetOrderTestAdapter,
+)
 from ytm_executor.guards import SecretFieldError, reject_secret_fields
 from ytm_executor.risk import (
     RiskPolicy,
@@ -30,6 +34,7 @@ def preflight_command(
     item: dict[str, Any],
     *,
     local_credentials: Iterable[CredentialSummary],
+    local_secret_resolver: Callable[[str, str], dict[str, str]] | None = None,
     risk_policy: RiskPolicy | None = None,
     risk_state: RiskState | None = None,
     validation_summaries: Iterable[dict[str, Any]],
@@ -92,7 +97,19 @@ def preflight_command(
             "real execution is disabled in this executor build",
             extra={"adapterPreflight": "blocked", "riskPreflight": "passed"},
         )
-    adapter_result = DisabledBrokerAdapter(provider=provider).prepare_order(order_request)
+    try:
+        adapter = _adapter_for_command(
+            command,
+            provider=provider,
+            local_secret_resolver=local_secret_resolver,
+        )
+        adapter_result = adapter.prepare_order(order_request)
+    except ValueError as exc:
+        return _reject(
+            "adapter_preflight_failed",
+            str(exc),
+            extra={"adapterPreflight": "failed", "riskPreflight": "passed"},
+        )
     return _acknowledge_without_order_placement(
         adapter_payload=adapter_result.payload,
         provider=provider,
@@ -193,6 +210,37 @@ def _reject(
 def _decision(*, status: str, result_payload: dict[str, Any]) -> CommandPreflightDecision:
     reject_secret_fields(result_payload)
     return CommandPreflightDecision(status=status, result_payload=result_payload)
+
+
+def _adapter_for_command(
+    command: dict[str, Any],
+    *,
+    provider: str,
+    local_secret_resolver: Callable[[str, str], dict[str, str]] | None,
+):
+    adapter_name = _adapter_name(command)
+    if adapter_name != BINANCE_SPOT_TESTNET_ORDER_TEST_ADAPTER:
+        return DisabledBrokerAdapter(provider=provider)
+    if provider != "binance":
+        raise ValueError("Binance Spot testnet adapter requires provider=binance")
+    if local_secret_resolver is None:
+        raise ValueError("local Binance credential is required for testnet adapter")
+    credential_name = _text(command.get("credentialName")) or "main"
+    secret = local_secret_resolver(provider, credential_name)
+    api_key = _text(secret.get("apiKey"))
+    api_secret = _text(secret.get("apiSecret"))
+    if not api_key or not api_secret:
+        raise ValueError("local Binance API key and secret are required for testnet adapter")
+    return BinanceSpotTestnetOrderTestAdapter(api_key=api_key, api_secret=api_secret)
+
+
+def _adapter_name(command: dict[str, Any]) -> str:
+    payload = command.get("commandPayload")
+    if isinstance(payload, dict):
+        value = payload.get("adapter") or payload.get("adapterMode")
+        if isinstance(value, str):
+            return value.strip()
+    return ""
 
 
 def _checked_at(summary: dict[str, Any]) -> datetime | None:

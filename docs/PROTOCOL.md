@@ -84,6 +84,11 @@ a deterministic `clientOrderId`. If YTM did not provide `clientOrderId`, the exe
 bounded id from provider plus command id. The current foundation build uses a disabled adapter and
 reports `order_placement_skipped`.
 
+For Binance `external_paper`, a command may explicitly request
+`commandPayload.adapter=binance_spot_testnet_order_test`. The executor then uses the local Binance
+credential and the official `binance-sdk-spot` package to call Spot Testnet `order_test`. This is a
+validation-only broker call and does not place an order.
+
 ## Result
 
 ```text

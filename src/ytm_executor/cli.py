@@ -151,6 +151,10 @@ def _run(args: argparse.Namespace) -> int:
             decision = preflight_command(
                 item,
                 local_credentials=store.list(),
+                local_secret_resolver=lambda provider, name: store.get(
+                    provider=provider,
+                    name=name,
+                ),
                 risk_policy=risk_policy,
                 risk_state=read_risk_state(Path(args.risk_state_file)),
                 validation_summaries=validation_store.list_public(),
