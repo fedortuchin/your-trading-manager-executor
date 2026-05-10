@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "cryptography>=48.0.0",
+    "t-tech-investments>=0.3.3",
 ]
 
 [project.scripts]
@@ -20,6 +21,13 @@ dev = [
     "pytest>=9.0",
     "ruff>=0.14",
 ]
+
+[tool.uv.sources]
+t-tech-investments = { index = "tbank" }
+
+[[tool.uv.index]]
+name = "tbank"
+url = "https://opensource.tbank.ru/api/v4/projects/238/packages/pypi/simple"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

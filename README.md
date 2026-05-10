@@ -14,6 +14,8 @@ Implemented:
 - machine token storage on the executor host;
 - local AES-GCM secret store for broker credentials;
 - heartbeat with non-secret credential metadata;
+- validate-only broker credential checks from the executor host;
+- heartbeat with sanitized validation status, permissions summary, and account fingerprint;
 - command lease polling;
 - client-side rejection of secret-like fields in YTM API payloads;
 - Docker-first VPS installer;
@@ -54,6 +56,14 @@ sudo docker compose run --rm ytm-executor broker add --provider tbank
 ```
 
 For Binance, use `--provider binance`. Do not pass broker tokens in shell arguments.
+Validate the local credential from the VPS without placing orders:
+
+```bash
+sudo docker compose run --rm ytm-executor broker validate --provider tbank
+```
+
+Validation calls only read-only broker identity/account endpoints. YTM receives only status,
+permissions summary, warnings, checked time, and a hashed account fingerprint.
 
 To add a broker credential during the same install, ask the installer to prompt on the VPS terminal:
 
@@ -61,7 +71,8 @@ To add a broker credential during the same install, ask the installer to prompt 
 curl -fsSL https://raw.githubusercontent.com/fedortuchin/your-trading-manager-executor/main/scripts/install.sh | sudo bash -s -- \
   --server https://trademate.pro \
   --enrollment-token ytm_enroll_xxx \
-  --broker-provider tbank
+  --broker-provider tbank \
+  --validate-broker
 ```
 
 Do not pass broker tokens in the install command. The installer uses a local terminal prompt, so
@@ -90,7 +101,9 @@ Manual install from a built wheel:
 ```bash
 python3.13 -m venv .venv
 . .venv/bin/activate
-pip install ytm-executor-0.1.0-py3-none-any.whl
+pip install \
+  --extra-index-url https://opensource.tbank.ru/api/v4/projects/238/packages/pypi/simple \
+  ytm-executor-0.1.0-py3-none-any.whl
 ```
 
 Enroll with the token shown by YTM:
@@ -105,6 +118,12 @@ Add a local broker credential. This stores the secret only on this VPS:
 
 ```bash
 ytm-executor broker add --provider tbank --name main
+```
+
+Validate it locally:
+
+```bash
+ytm-executor broker validate --provider tbank --name main
 ```
 
 Run once:
@@ -127,6 +146,7 @@ YTM Cloud may receive:
 - heartbeat status;
 - command lease requests;
 - sanitized execution results.
+- sanitized broker credential validation status.
 
 YTM Cloud must not receive:
 
@@ -137,6 +157,8 @@ YTM Cloud must not receive:
 - Authorization headers.
 
 The executor rejects outgoing YTM payloads containing secret-like keys before sending them.
+Broker validation may send broker credentials only to the selected broker API from the executor
+host. Those credentials are never included in YTM API payloads.
 
 Network expectations are documented in `docs/NETWORK.md`.
 

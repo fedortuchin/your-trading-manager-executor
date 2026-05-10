@@ -9,6 +9,8 @@ import pytest
 from ytm_executor.client import YtmClient
 from ytm_executor.guards import SecretFieldError
 from ytm_executor.secret_store import LocalSecretStore
+from ytm_executor.validation import validate_broker_credential
+from ytm_executor.validation_store import LocalValidationStore
 
 
 @dataclass(slots=True)
@@ -24,6 +26,24 @@ class CaptureTransport:
         headers: dict[str, str],
     ) -> dict[str, Any]:
         self.requests.append({"headers": headers, "payload": payload, "url": url})
+        return self.responses.pop(0)
+
+
+@dataclass(slots=True)
+class BrokerCaptureTransport:
+    responses: list[dict[str, Any]]
+    requests: list[dict[str, Any]] = field(default_factory=list)
+
+    def get_json(
+        self,
+        *,
+        url: str,
+        headers: dict[str, str],
+        timeout_seconds: int,
+    ) -> dict[str, Any]:
+        self.requests.append(
+            {"headers": headers, "timeout_seconds": timeout_seconds, "url": url}
+        )
         return self.responses.pop(0)
 
 
@@ -74,6 +94,71 @@ def test_local_broker_token_is_not_sent_to_ytm(tmp_path: Path) -> None:
     assert "tbank-secret-token" not in raw_requests
     assert "localCredentials" in raw_requests
     assert "main" in raw_requests
+
+
+def test_validated_broker_secret_is_not_sent_to_ytm(tmp_path: Path) -> None:
+    store = LocalSecretStore(
+        key_file=tmp_path / "master.key",
+        secrets_file=tmp_path / "secrets.json",
+    )
+    validations = LocalValidationStore(validations_file=tmp_path / "validations.json")
+    store.put(
+        provider="binance",
+        name="main",
+        secret={"apiKey": "binance-public-key", "apiSecret": "binance-private-secret"},
+    )
+    broker_transport = BrokerCaptureTransport(
+        responses=[
+            {
+                "accountType": "SPOT",
+                "canTrade": True,
+                "canWithdraw": False,
+                "permissions": ["SPOT"],
+                "uid": 123456,
+            }
+        ]
+    )
+    summary = validate_broker_credential(
+        provider="binance",
+        name="main",
+        secret=store.get(provider="binance", name="main"),
+        transport=broker_transport,
+    )
+    validations.put(summary)
+    ytm_transport = CaptureTransport(
+        responses=[
+            {"executor": {"id": "executor-1"}, "accessToken": "ytm_exec_access"},
+            {"executor": {"id": "executor-1"}},
+        ]
+    )
+    client = YtmClient(
+        allowed_hosts=("ytm.example.test",),
+        server_url="https://ytm.example.test",
+        transport=ytm_transport,
+    )
+
+    enrolled = client.enroll(
+        allowed_egress={"ytmApi": "ytm.example.test"},
+        capabilities={"leases": True, "zeroSecret": True},
+        client_version="test",
+        enrollment_token="ytm_enroll_token",
+    )
+    capabilities = {"leases": True, "zeroSecret": True}
+    capabilities.update(store.heartbeat_capability(validation_summaries=validations.list_public()))
+    client.heartbeat(
+        access_token=enrolled["accessToken"],
+        capabilities=capabilities,
+        client_version="test",
+    )
+
+    broker_requests = repr(broker_transport.requests)
+    assert "binance-public-key" in broker_requests
+    assert "binance-private-secret" not in broker_requests
+    raw_ytm_requests = repr(ytm_transport.requests)
+    assert "binance-public-key" not in raw_ytm_requests
+    assert "binance-private-secret" not in raw_ytm_requests
+    assert "brokerCredentialValidations" in raw_ytm_requests
+    assert "accountFingerprint" in raw_ytm_requests
 
 
 def test_client_rejects_secret_like_payload_keys() -> None:

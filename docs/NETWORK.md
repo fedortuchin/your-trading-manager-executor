@@ -9,7 +9,11 @@ Current foundation build:
 - YTM Cloud over HTTPS:
   - default production: `https://trademate.pro`
   - custom deployments: the host passed to `ytm-executor enroll --server-url`
-- No broker API egress is required because real broker adapters are not implemented yet.
+- Optional validate-only broker API egress when the user runs `ytm-executor broker validate`:
+  - Binance REST: `https://api.binance.com`
+  - T-Bank Invest gRPC: `invest-public-api.tinkoff.ru:443`
+- Continuous `ytm-executor run` only needs the configured YTM server until real broker adapters are
+  enabled.
 
 The executor stores the allowed YTM host during enrollment and refuses YTM API requests to any other
 host.
@@ -22,6 +26,8 @@ Docker-first installer may access:
 - the OS package repositories used by the VPS image when Docker is missing;
 - `ghcr.io` and GitHub container registry backing hosts to pull the executor image;
 - the configured YTM server for enrollment.
+- `opensource.tbank.ru` when building/installing the Python package with the official T-Bank SDK
+  dependency.
 
 Python/venv installer may also access:
 
@@ -29,15 +35,16 @@ Python/venv installer may also access:
 - `astral.sh` to install `uv`;
 - Python package indexes used by `uv`.
 
-## Future Broker Adapter Egress
+## Broker Adapter Egress
 
-When broker adapters are enabled, runtime egress should be limited to the configured YTM server and
-the selected broker API domains. Expected examples:
+Broker validation and future broker adapters must be limited to the configured YTM server and the
+selected broker API domains. Expected examples:
 
 - Binance: Binance REST/WebSocket API domains configured for the selected market and account type.
 - T-Bank Invest: T-Bank Invest API endpoints configured by the adapter.
 
 Broker API hosts must be explicit adapter configuration, not YTM-provided secret-bearing payloads.
+YTM heartbeat may receive sanitized validation status, but never broker credentials.
 
 ## Firewall Guidance
 

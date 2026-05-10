@@ -20,6 +20,8 @@ from ytm_executor.state import (
     read_state,
     write_state,
 )
+from ytm_executor.validation import validate_broker_credential
+from ytm_executor.validation_store import DEFAULT_VALIDATIONS_FILE, LocalValidationStore
 
 CLIENT_VERSION = f"ytm-executor/{__version__}"
 
@@ -29,6 +31,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--state-file", default=str(DEFAULT_STATE_FILE))
     parser.add_argument("--secrets-file", default=str(DEFAULT_SECRETS_FILE))
     parser.add_argument("--key-file", default=str(DEFAULT_KEY_FILE))
+    parser.add_argument("--validations-file", default=str(DEFAULT_VALIDATIONS_FILE))
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     enroll_parser = subparsers.add_parser("enroll")
@@ -47,6 +50,9 @@ def main(argv: list[str] | None = None) -> int:
     broker_add.add_argument("--token")
     broker_add.add_argument("--api-key")
     broker_add.add_argument("--api-secret")
+    broker_validate = broker_subparsers.add_parser("validate")
+    broker_validate.add_argument("--provider", required=True, choices=["binance", "tbank"])
+    broker_validate.add_argument("--name", default="main")
     broker_subparsers.add_parser("list")
 
     args = parser.parse_args(argv)
@@ -92,10 +98,15 @@ def _enroll(args: argparse.Namespace) -> int:
 def _run(args: argparse.Namespace) -> int:
     state = read_state(Path(args.state_file))
     store = _store(args)
+    validation_store = _validation_store(args)
     client = YtmClient(server_url=state.server_url, allowed_hosts=state.allowed_hosts)
     while True:
         capabilities = {"leases": True, "zeroSecret": True}
-        capabilities.update(store.heartbeat_capability())
+        capabilities.update(
+            store.heartbeat_capability(
+                validation_summaries=validation_store.list_public(),
+            )
+        )
         client.heartbeat(
             access_token=state.access_token,
             capabilities=capabilities,
@@ -113,11 +124,22 @@ def _run(args: argparse.Namespace) -> int:
 
 def _broker(args: argparse.Namespace) -> int:
     store = _store(args)
+    validation_store = _validation_store(args)
     if args.broker_command == "add":
         secret = _broker_secret(args)
         store.put(provider=args.provider, name=args.name, secret=secret)
         print("broker credential stored locally")
         return 0
+    if args.broker_command == "validate":
+        secret = store.get(provider=args.provider, name=args.name)
+        summary = validate_broker_credential(
+            provider=args.provider,
+            name=args.name,
+            secret=secret,
+        )
+        validation_store.put(summary)
+        print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
+        return 0 if summary.get("status") == "passed" else 1
     if args.broker_command == "list":
         for item in store.list():
             print(f"{item.provider}\t{item.name}")
@@ -142,6 +164,10 @@ def _store(args: argparse.Namespace) -> LocalSecretStore:
         key_file=Path(args.key_file),
         secrets_file=Path(args.secrets_file),
     )
+
+
+def _validation_store(args: argparse.Namespace) -> LocalValidationStore:
+    return LocalValidationStore(validations_file=Path(args.validations_file))
 
 
 def _acknowledge_without_order_placement(

@@ -32,6 +32,8 @@ Primary controls:
 
 - broker credentials are entered through local prompts, not YTM UI forms;
 - broker credentials are stored only in the executor local encrypted store;
+- broker credential validation runs from the executor host and stores only sanitized status,
+  warnings, permissions summary, and hashed account fingerprint;
 - YTM API payloads are rejected client-side when secret-like fields are present;
 - YTM server APIs also reject secret-like result and metadata fields;
 - Docker runtime uses a non-root user, persistent local volume, dropped Linux capabilities, and
@@ -43,12 +45,16 @@ Known limits:
 - local encrypted storage protects against accidental disclosure, not full compromise of the VPS;
 - users should harden SSH access, backups, host firewall rules, and broker-side API restrictions;
 - no real broker order adapters are enabled in the current foundation build.
+- validate-only broker API calls still require users to trust and harden the executor host because
+  that host can decrypt local broker credentials at runtime.
 
 ## Verification
 
 Users and auditors can verify this by checking:
 
 - `src/ytm_executor/client.py`: rejects secret-like fields before any request to YTM.
+- `src/ytm_executor/validation.py`: calls broker read/identity endpoints and returns only sanitized
+  validation summaries.
 - `tests/test_no_secret_egress.py`: stores fake broker secrets locally and verifies YTM payloads do
   not contain them.
 - Release artifacts are built with `scripts/build_artifact.sh` and can be signed with

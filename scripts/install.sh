@@ -6,6 +6,7 @@ IMAGE="ghcr.io/fedortuchin/your-trading-manager-executor:latest"
 SERVER_URL=""
 ENROLLMENT_TOKEN=""
 BROKER_PROVIDER=""
+VALIDATE_BROKER="false"
 START_SERVICE="true"
 
 usage() {
@@ -15,6 +16,7 @@ Usage:
 
 Options:
   --broker-provider <tbank|binance>  Prompt locally for broker credentials after enrollment.
+  --validate-broker                 Validate broker credentials after the local prompt.
   --image <image>                    Default: ghcr.io/fedortuchin/your-trading-manager-executor:latest.
   --install-dir <path>               Default: /opt/ytm-executor.
   --no-start                         Install and enroll, but do not start the compose service.
@@ -50,6 +52,10 @@ while [[ $# -gt 0 ]]; do
       BROKER_PROVIDER="${2:-}"
       shift 2
       ;;
+    --validate-broker)
+      VALIDATE_BROKER="true"
+      shift
+      ;;
     --image)
       IMAGE="${2:-}"
       shift 2
@@ -77,6 +83,7 @@ done
 [[ -n "$SERVER_URL" ]] || fail "--server is required"
 [[ -n "$ENROLLMENT_TOKEN" ]] || fail "--enrollment-token is required"
 [[ -n "$IMAGE" ]] || fail "--image must not be empty"
+[[ "$VALIDATE_BROKER" != "true" || -n "$BROKER_PROVIDER" ]] || fail "--validate-broker requires --broker-provider"
 case "$BROKER_PROVIDER" in
   ""|"tbank"|"binance") ;;
   *) fail "--broker-provider must be tbank or binance" ;;
@@ -171,6 +178,10 @@ configure_broker() {
   [[ -r /dev/tty ]] || fail "broker credential prompt requires an interactive terminal"
   log "prompting locally for ${BROKER_PROVIDER} credentials"
   compose run --rm ytm-executor broker add --provider "$BROKER_PROVIDER" < /dev/tty
+  if [[ "$VALIDATE_BROKER" == "true" ]]; then
+    log "validating ${BROKER_PROVIDER} credentials from this host"
+    compose run --rm -T ytm-executor broker validate --provider "$BROKER_PROVIDER"
+  fi
 }
 
 log "installing prerequisites"

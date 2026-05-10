@@ -6,7 +6,10 @@ ENV PYTHONHASHSEED=0 \
 
 WORKDIR /app
 COPY dist/*.whl /tmp/ytm-executor-dist/
-RUN pip install --root-user-action=ignore --no-cache-dir /tmp/ytm-executor-dist/*.whl \
+ARG T_BANK_PYPI_URL=https://opensource.tbank.ru/api/v4/projects/238/packages/pypi/simple
+RUN pip install --root-user-action=ignore --no-cache-dir \
+      --extra-index-url "${T_BANK_PYPI_URL}" \
+      /tmp/ytm-executor-dist/*.whl \
     && rm -rf /tmp/ytm-executor-dist \
     && groupadd --system ytm-executor \
     && useradd --system --create-home --home-dir /home/ytm-executor \

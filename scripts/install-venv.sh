@@ -12,6 +12,7 @@ SERVER_URL=""
 ENROLLMENT_TOKEN=""
 BROKER_PROVIDER=""
 START_SERVICE="true"
+T_BANK_PYPI_URL="https://opensource.tbank.ru/api/v4/projects/238/packages/pypi/simple"
 
 usage() {
   cat >&2 <<'EOF'
@@ -138,6 +139,7 @@ install_executor() {
   as_executor "$UV_BIN" python install "$PYTHON_VERSION"
   as_executor "$UV_BIN" venv --python "$PYTHON_VERSION" "${INSTALL_DIR}/.venv"
   as_executor "$UV_BIN" pip install --python "${INSTALL_DIR}/.venv/bin/python" --upgrade \
+    --extra-index-url "$T_BANK_PYPI_URL" \
     "git+${REPO_URL}@${REPO_REF}"
 }
 

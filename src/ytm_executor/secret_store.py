@@ -6,6 +6,7 @@ import base64
 import json
 import os
 import stat
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -72,13 +73,34 @@ class LocalSecretStore:
             for item in _load_records(self._secrets_file)
         )
 
-    def heartbeat_capability(self) -> dict[str, Any]:
-        return {
+    def get(self, *, provider: str, name: str) -> dict[str, str]:
+        normalized_provider = _required_text(provider, "provider")
+        normalized_name = _required_text(name, "name")
+        for item in _load_records(self._secrets_file):
+            if _same_record(item, normalized_provider, normalized_name):
+                return self._decrypt(item)
+        credential_id = f"{normalized_provider}/{normalized_name}"
+        raise ValueError(f"broker credential is not configured: {credential_id}")
+
+    def heartbeat_capability(
+        self,
+        *,
+        validation_summaries: Iterable[Mapping[str, Any]] = (),
+    ) -> dict[str, Any]:
+        capability: dict[str, Any] = {
             "localCredentials": [
                 {"name": item.name, "provider": item.provider}
                 for item in sorted(self.list(), key=lambda value: (value.provider, value.name))
             ]
         }
+        validations = [dict(item) for item in validation_summaries]
+        if validations:
+            capability["brokerCredentialValidations"] = sorted(
+                validations,
+                key=lambda value: (str(value.get("provider", "")), str(value.get("name", ""))),
+            )
+        reject_secret_fields(capability)
+        return capability
 
     def _encrypt(self, secret: dict[str, str]) -> dict[str, str]:
         key = self._load_or_create_key()
@@ -89,6 +111,19 @@ class LocalSecretStore:
             "ciphertext": base64.urlsafe_b64encode(ciphertext).decode("ascii"),
             "nonce": base64.urlsafe_b64encode(nonce).decode("ascii"),
         }
+
+    def _decrypt(self, item: dict[str, Any]) -> dict[str, str]:
+        key = self._load_or_create_key()
+        ciphertext = base64.urlsafe_b64decode(_required_text(item.get("ciphertext"), "ciphertext"))
+        nonce = base64.urlsafe_b64decode(_required_text(item.get("nonce"), "nonce"))
+        raw = AESGCM(key).decrypt(nonce, ciphertext, b"ytm-executor-local-secret-v1")
+        parsed = json.loads(raw.decode("utf-8"))
+        if not isinstance(parsed, dict):
+            raise ValueError("stored broker credential must be an object")
+        secret = {str(key): str(value) for key, value in parsed.items()}
+        if not secret:
+            raise ValueError("stored broker credential is empty")
+        return secret
 
     def _load_or_create_key(self) -> bytes:
         if self._key_file.exists():
