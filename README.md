@@ -16,6 +16,8 @@ Implemented:
 - heartbeat with non-secret credential metadata;
 - command lease polling;
 - client-side rejection of secret-like fields in YTM API payloads;
+- Docker-first VPS installer;
+- GHCR Docker image build, cosign signing, SBOM generation, and release checksums in CI;
 - tests proving locally stored broker secrets are not sent to YTM requests.
 
 Not implemented yet:
@@ -40,9 +42,8 @@ curl -fsSL https://raw.githubusercontent.com/fedortuchin/your-trading-manager-ex
   --enrollment-token ytm_enroll_xxx
 ```
 
-This creates a locked-down `ytm-executor` system user, installs Python 3.13 through `uv`, installs
-the executor from this public repository, enrolls it with YTM, and starts the `ytm-executor`
-systemd service.
+This installs Docker Compose when needed, writes `/opt/ytm-executor/docker-compose.yml`, pulls the
+public executor image, enrolls it with YTM, and starts the container with a persistent local volume.
 
 To add a broker credential during the same install, ask the installer to prompt on the VPS terminal:
 
@@ -54,7 +55,25 @@ curl -fsSL https://raw.githubusercontent.com/fedortuchin/your-trading-manager-ex
 ```
 
 Do not pass broker tokens in the install command. The installer uses a local terminal prompt, so
-broker secrets are written only into the encrypted local store under `/home/ytm-executor`.
+broker secrets are written only into the encrypted local store inside the executor's Docker volume.
+
+Docker Compose manual flow:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/fedortuchin/your-trading-manager-executor/main/docker-compose.yml
+docker compose run --rm ytm-executor enroll \
+  --server-url https://your-ytm-domain.example \
+  --enrollment-token ytm_enroll_xxx
+docker compose up -d
+```
+
+Python/venv install for development or power users:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fedortuchin/your-trading-manager-executor/main/scripts/install-venv.sh | sudo bash -s -- \
+  --server https://your-ytm-domain.example \
+  --enrollment-token ytm_enroll_xxx
+```
 
 Manual install from a built wheel:
 
@@ -109,6 +128,8 @@ YTM Cloud must not receive:
 
 The executor rejects outgoing YTM payloads containing secret-like keys before sending them.
 
+Network expectations are documented in `docs/NETWORK.md`.
+
 ## Reproducible Build
 
 ```bash
@@ -124,3 +145,11 @@ scripts/sign_artifact.sh dist/ytm_executor-0.1.0-py3-none-any.whl
 ```
 
 The signer requires `cosign` or `minisign`.
+
+Docker images are published to:
+
+```text
+ghcr.io/fedortuchin/your-trading-manager-executor
+```
+
+Release artifacts and SHA256 checksums are described in `RELEASES.md`.

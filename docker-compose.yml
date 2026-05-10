@@ -1,0 +1,19 @@
+name: ytm-executor
+
+services:
+  ytm-executor:
+    image: ghcr.io/fedortuchin/your-trading-manager-executor:latest
+    restart: unless-stopped
+    command: run
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ytm_executor_state:/home/ytm-executor/.ytm-executor
+
+volumes:
+  ytm_executor_state:

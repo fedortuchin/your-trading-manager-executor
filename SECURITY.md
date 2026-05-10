@@ -5,6 +5,45 @@
 Broker credentials stay on the executor host. YTM Cloud must not receive broker API secrets,
 T-Bank Invest tokens, private keys, passphrases, passwords, or Authorization headers.
 
+## Threat Model
+
+Protected assets:
+
+- broker API tokens and exchange API key material;
+- YTM executor machine token;
+- approved command stream;
+- local execution results before they are sanitized.
+
+Trusted components:
+
+- the user-controlled VPS or host running the executor;
+- the public executor source code and signed release artifacts;
+- YTM Cloud only for approvals, command leases, audit, and sanitized status.
+
+Not trusted with broker secrets:
+
+- YTM Cloud;
+- browser sessions;
+- support staff;
+- GitHub Actions logs and release metadata;
+- shell command history and process lists.
+
+Primary controls:
+
+- broker credentials are entered through local prompts, not YTM UI forms;
+- broker credentials are stored only in the executor local encrypted store;
+- YTM API payloads are rejected client-side when secret-like fields are present;
+- YTM server APIs also reject secret-like result and metadata fields;
+- Docker runtime uses a non-root user, persistent local volume, dropped Linux capabilities, and
+  `no-new-privileges`;
+- release artifacts include SHA256 checksums, image signing, and SBOM output.
+
+Known limits:
+
+- local encrypted storage protects against accidental disclosure, not full compromise of the VPS;
+- users should harden SSH access, backups, host firewall rules, and broker-side API restrictions;
+- no real broker order adapters are enabled in the current foundation build.
+
 ## Verification
 
 Users and auditors can verify this by checking:
@@ -14,6 +53,8 @@ Users and auditors can verify this by checking:
   not contain them.
 - Release artifacts are built with `scripts/build_artifact.sh` and can be signed with
   `scripts/sign_artifact.sh`.
+- Docker images are published by GitHub Actions, signed with cosign, and accompanied by SBOM output.
+- Network expectations are documented in `docs/NETWORK.md`.
 
 ## Reporting
 
