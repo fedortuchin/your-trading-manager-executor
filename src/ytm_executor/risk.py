@@ -16,7 +16,7 @@ from ytm_executor.state import DEFAULT_HOME
 
 DEFAULT_RISK_POLICY_FILE = DEFAULT_HOME / "risk-policy.json"
 DEFAULT_RISK_STATE_FILE = DEFAULT_HOME / "risk-state.json"
-SUPPORTED_ORDER_TYPES = frozenset({"limit", "market", "stop_limit", "stop_market"})
+SUPPORTED_ORDER_TYPES = frozenset({"limit", "market", "stop", "stop_limit", "stop_market"})
 
 
 @dataclass(frozen=True, slots=True)

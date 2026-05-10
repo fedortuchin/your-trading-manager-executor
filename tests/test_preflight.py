@@ -27,6 +27,24 @@ def test_preflight_acknowledges_external_paper_without_order_placement() -> None
     assert decision.status == "acknowledged"
     assert decision.result_payload == {
         "executionMode": "external_paper",
+        "adapterPreflight": "passed",
+        "adapterResult": {
+            "adapter": "disabled",
+            "clientOrderId": "ytm_command_1",
+            "executorAction": "order_placement_skipped",
+            "orderRequest": {
+                "clientOrderId": "ytm_command_1",
+                "executionMode": "external_paper",
+                "limitPrice": "100",
+                "notional": "100",
+                "orderType": "limit",
+                "positionEffect": "open",
+                "provider": "binance",
+                "side": "long",
+                "symbol": "BTCUSDT",
+            },
+            "reason": "broker adapters are not enabled in this foundation build",
+        },
         "executorAction": "order_placement_skipped",
         "preflight": "passed",
         "provider": "binance",
@@ -179,19 +197,43 @@ def test_preflight_rejects_order_over_local_notional_limit() -> None:
     assert decision.result_payload["preflightReasonCode"] == "risk_order_notional_exceeded"
 
 
+def test_preflight_rejects_invalid_adapter_order_request() -> None:
+    command = _leased_command(provider="binance", execution_mode="external_paper")
+    command["command"].pop("side")
+
+    decision = preflight_command(
+        command,
+        local_credentials=(CredentialSummary(provider="binance", name="main"),),
+        risk_policy=_risk_policy(),
+        risk_state=_risk_state(),
+        validation_summaries=(
+            _validation(provider="binance", checked_at="2026-05-10T10:00:00Z"),
+        ),
+        now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
+    )
+
+    assert decision.status == "rejected"
+    assert decision.result_payload["preflightReasonCode"] == "adapter_order_request_invalid"
+    assert decision.result_payload["riskPreflight"] == "passed"
+
+
 def _leased_command(*, provider: str, execution_mode: str) -> dict[str, object]:
     return {
         "command": {
+            "clientOrderId": "ytm_command_1",
             "commandPayload": {
                 "leverage": "1",
                 "orderNotional": "100",
                 "orderType": "limit",
+                "positionEffect": "open",
+                "price": "100",
                 "projectedPositionNotional": "100",
             },
             "executionAccountSource": "provider",
             "executionMode": execution_mode,
             "id": "command-1",
             "provider": provider,
+            "side": "long",
             "status": "created",
             "symbol": "BTCUSDT",
         },

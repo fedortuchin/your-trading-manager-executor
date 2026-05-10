@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from ytm_executor.adapters import DisabledBrokerAdapter, build_order_request
 from ytm_executor.guards import SecretFieldError, reject_secret_fields
 from ytm_executor.risk import (
     RiskPolicy,
@@ -77,12 +78,26 @@ def preflight_command(
             risk_decision.reason or "local risk preflight failed",
             extra={"riskPreflight": "failed"},
         )
+    try:
+        order_request = build_order_request(command, execution_mode=execution_mode)
+    except ValueError as exc:
+        return _reject(
+            "adapter_order_request_invalid",
+            str(exc),
+            extra={"adapterPreflight": "failed", "riskPreflight": "passed"},
+        )
     if execution_mode == "real":
         return _reject(
             "real_execution_disabled",
             "real execution is disabled in this executor build",
+            extra={"adapterPreflight": "blocked", "riskPreflight": "passed"},
         )
-    return _acknowledge_without_order_placement(provider=provider, execution_mode=execution_mode)
+    adapter_result = DisabledBrokerAdapter(provider=provider).prepare_order(order_request)
+    return _acknowledge_without_order_placement(
+        adapter_payload=adapter_result.payload,
+        provider=provider,
+        execution_mode=execution_mode,
+    )
 
 
 def _validation_block(
@@ -129,6 +144,7 @@ def _validation_block(
 
 def _acknowledge_without_order_placement(
     *,
+    adapter_payload: dict[str, Any],
     provider: str,
     execution_mode: str,
 ) -> CommandPreflightDecision:
@@ -137,9 +153,16 @@ def _acknowledge_without_order_placement(
         result_payload={
             "executionMode": execution_mode,
             "executorAction": "order_placement_skipped",
+            "adapterPreflight": "passed",
+            "adapterResult": adapter_payload,
             "preflight": "passed",
             "provider": provider,
-            "reason": "broker adapters are not enabled in this foundation build",
+            "reason": str(
+                adapter_payload.get(
+                    "reason",
+                    "broker adapters are not enabled in this foundation build",
+                )
+            ),
             "riskPreflight": "passed",
             "zeroSecret": True,
         },

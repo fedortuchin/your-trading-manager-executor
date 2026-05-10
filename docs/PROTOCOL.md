@@ -78,6 +78,12 @@ the local risk policy is missing, disabled, incomplete, kill-switched, paper-onl
 command violates local instrument, order type, notional, projected position, daily loss, or leverage
 limits.
 
+After risk preflight, the executor normalizes the command into a broker adapter order request. The
+request must include provider, symbol, side, position effect, order type, quantity or notional, and
+a deterministic `clientOrderId`. If YTM did not provide `clientOrderId`, the executor derives a
+bounded id from provider plus command id. The current foundation build uses a disabled adapter and
+reports `order_placement_skipped`.
+
 ## Result
 
 ```text

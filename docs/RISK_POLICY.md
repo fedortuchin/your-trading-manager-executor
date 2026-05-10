@@ -84,5 +84,9 @@ YTM Cloud sends an approved command. The executor independently loads its local 
 risk state before any future broker adapter can run. Command payloads cannot raise limits, disable
 the kill switch, add symbols, add order types, or turn off paper-only mode.
 
+If local risk passes, the executor still has to normalize the command into a broker adapter order
+request with deterministic `clientOrderId`. Invalid adapter requests fail closed before any broker
+adapter can run.
+
 Heartbeat reports only a sanitized summary: configured/enabled/kill-switch/paper-only flags, limit
 presence, and counts. It does not upload the full policy or local risk state.

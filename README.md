@@ -22,6 +22,8 @@ Implemented:
 - local command preflight before any future broker adapter can run;
 - mandatory local risk policy gate with kill switch, paper-only mode, allowed instruments, order
   type, notional, position, daily loss, and leverage limits;
+- broker adapter boundary with normalized order requests and deterministic `clientOrderId`
+  fallback;
 - command lease polling;
 - client-side rejection of secret-like fields in YTM API payloads;
 - Docker-first VPS installer;
@@ -188,6 +190,8 @@ When a command is leased, the executor runs local preflight before acknowledging
 - local risk policy must be configured, enabled, kill switch off, and complete;
 - command instrument, order type, notional, projected position, daily loss, and leverage must fit
   the local policy;
+- order request normalization must produce a valid adapter request and deterministic
+  `clientOrderId`;
 - `external_paper` is acknowledged as dry-run with `order_placement_skipped`;
 - `real` is locally rejected in this foundation build.
 
@@ -218,6 +222,8 @@ host. Those credentials are never included in YTM API payloads.
 Command preflight is also local and fail-closed: no adapter execution can be added later without
 passing these local checks first. Local risk policy is stored on the executor host and is not
 controlled by YTM Cloud, so a cloud-side command cannot relax the executor's kill switch or limits.
+The adapter boundary currently uses a disabled adapter that prepares a sanitized order request and
+returns `order_placement_skipped`; it does not call a broker.
 The secret-field guard prevents common accidental leaks by rejecting secret-like field names; it is
 not a substitute for source review, tests, signed releases, and network allowlisting.
 
