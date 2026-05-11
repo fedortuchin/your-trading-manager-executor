@@ -2,7 +2,7 @@
 set -euo pipefail
 
 INSTALL_DIR="/opt/ytm-executor"
-IMAGE="ghcr.io/fedortuchin/your-trading-manager-executor:v0.7.0"
+IMAGE="ghcr.io/fedortuchin/your-trading-manager-executor:v0.7.1"
 SERVER_URL=""
 ENROLLMENT_TOKEN=""
 BROKER_PROVIDER=""
@@ -15,15 +15,16 @@ Usage:
   install.sh --server <url> --enrollment-token <token> [options]
 
 Options:
-  --broker-provider <tbank|binance>  Prompt locally for broker credentials after enrollment.
+  --broker-provider <tbank|binance|okx>
+                                      Prompt locally for broker credentials after enrollment.
   --validate-broker                 Validate broker credentials after the local prompt.
-  --image <image>                    Default: ghcr.io/fedortuchin/your-trading-manager-executor:v0.7.0.
+  --image <image>                    Default: ghcr.io/fedortuchin/your-trading-manager-executor:v0.7.1.
   --install-dir <path>               Default: /opt/ytm-executor.
   --no-start                         Install and enroll, but do not start the compose service.
   -h, --help                         Show this help.
 
 Example:
-  curl -fsSL https://raw.githubusercontent.com/fedortuchin/your-trading-manager-executor/v0.7.0/scripts/install.sh | sudo bash -s -- \
+  curl -fsSL https://raw.githubusercontent.com/fedortuchin/your-trading-manager-executor/v0.7.1/scripts/install.sh | sudo bash -s -- \
     --server https://trademate.pro \
     --enrollment-token ytm_enroll_xxx
 EOF
@@ -85,8 +86,8 @@ done
 [[ -n "$IMAGE" ]] || fail "--image must not be empty"
 [[ "$VALIDATE_BROKER" != "true" || -n "$BROKER_PROVIDER" ]] || fail "--validate-broker requires --broker-provider"
 case "$BROKER_PROVIDER" in
-  ""|"tbank"|"binance") ;;
-  *) fail "--broker-provider must be tbank or binance" ;;
+  ""|"tbank"|"binance"|"okx") ;;
+  *) fail "--broker-provider must be tbank, binance, or okx" ;;
 esac
 
 install_prerequisites() {
