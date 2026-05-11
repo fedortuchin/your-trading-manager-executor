@@ -2,7 +2,7 @@
 set -euo pipefail
 
 INSTALL_DIR="/opt/ytm-executor"
-IMAGE="ghcr.io/fedortuchin/your-trading-manager-executor:v0.7.2"
+IMAGE="ghcr.io/fedortuchin/your-trading-manager-executor:v0.7.3"
 SERVER_URL=""
 ENROLLMENT_TOKEN=""
 BROKER_PROVIDER=""
@@ -30,13 +30,13 @@ Options:
   --validate-broker                 Validate broker credentials after the local prompt.
   --wizard                          Prompt for broker credentials and local risk policy.
   --enable-real-orders              Start the runtime with real order placement enabled.
-  --image <image>                    Default: ghcr.io/fedortuchin/your-trading-manager-executor:v0.7.2.
+  --image <image>                    Default: ghcr.io/fedortuchin/your-trading-manager-executor:v0.7.3.
   --install-dir <path>               Default: /opt/ytm-executor.
   --no-start                         Install and enroll, but do not start the compose service.
   -h, --help                         Show this help.
 
 Example:
-  curl -fsSL https://raw.githubusercontent.com/fedortuchin/your-trading-manager-executor/v0.7.2/scripts/install.sh | sudo bash -s -- \
+  curl -fsSL https://raw.githubusercontent.com/fedortuchin/your-trading-manager-executor/v0.7.3/scripts/install.sh | sudo bash -s -- \
     --server https://trademate.pro \
     --enrollment-token ytm_enroll_xxx \
     --wizard
