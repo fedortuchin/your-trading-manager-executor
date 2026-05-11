@@ -16,8 +16,8 @@ The executor rejects leased provider-backed commands when:
   position, per-symbol position, daily loss, leverage, position mode, or reduce-only rules;
 - `executionMode=real` while `paperOnly=true`.
 
-The current foundation build still rejects all `real` commands after risk preflight because real
-broker order adapters are not enabled yet.
+The current foundation build still rejects all `real` commands after validate-only broker preflight
+because real broker order adapters are not enabled yet.
 
 ## Required Local Limits
 
@@ -26,8 +26,8 @@ When `killSwitch=false`, the policy must include:
 - `allowedSymbols`;
 - `allowedOrderTypes`;
 - `allowedMarkets`;
-- for USD-M Futures: `allowedMarginModes`, `positionMode=one_way`, and `maxSymbolNotional` for
-  every allowed symbol;
+- for futures/swap markets: `allowedMarginModes`, `positionMode=one_way`, and
+  `maxSymbolNotional` for every allowed symbol;
 - `maxOrderNotional`;
 - `maxPositionNotional`;
 - `maxDailyLoss`;
@@ -78,6 +78,26 @@ Docker install equivalent:
 cd /opt/ytm-executor
 sudo docker compose run --rm ytm-executor risk init --kill-switch-off \
   --allow-market usdm_futures \
+  --allow-margin-mode cross \
+  --allow-symbol BTCUSDT \
+  --allow-order-type limit \
+  --max-order-notional 1000 \
+  --max-position-notional 5000 \
+  --max-symbol-notional BTCUSDT=5000 \
+  --max-daily-loss 250 \
+  --max-leverage 1 \
+  --position-mode one_way
+```
+
+OKX SWAP equivalent uses `okx_swap`. `allowedSymbols` must match the command symbol from YTM.
+The OKX adapter maps plain USDT pairs like `BTCUSDT` to native OKX ids such as
+`BTC-USDT-SWAP` before `order-precheck`. If a command contains `quantity`, OKX treats it as
+contract size; otherwise the adapter can derive contract size from `orderNotional` plus
+`priceReference`:
+
+```bash
+ytm-executor risk init --kill-switch-off \
+  --allow-market okx_swap \
   --allow-margin-mode cross \
   --allow-symbol BTCUSDT \
   --allow-order-type limit \

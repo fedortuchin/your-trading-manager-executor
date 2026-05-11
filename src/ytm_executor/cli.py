@@ -7,6 +7,7 @@ import getpass
 import json
 import sys
 import time
+from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -59,13 +60,14 @@ def main(argv: list[str] | None = None) -> int:
     broker_parser = subparsers.add_parser("broker")
     broker_subparsers = broker_parser.add_subparsers(dest="broker_command", required=True)
     broker_add = broker_subparsers.add_parser("add")
-    broker_add.add_argument("--provider", required=True, choices=["binance", "tbank"])
+    broker_add.add_argument("--provider", required=True, choices=["binance", "okx", "tbank"])
     broker_add.add_argument("--name", default="main")
     broker_add.add_argument("--token")
     broker_add.add_argument("--api-key")
     broker_add.add_argument("--api-secret")
+    broker_add.add_argument("--passphrase")
     broker_validate = broker_subparsers.add_parser("validate")
-    broker_validate.add_argument("--provider", required=True, choices=["binance", "tbank"])
+    broker_validate.add_argument("--provider", required=True, choices=["binance", "okx", "tbank"])
     broker_validate.add_argument("--name", default="main")
     broker_subparsers.add_parser("list")
 
@@ -254,8 +256,16 @@ def _broker_secret(args: argparse.Namespace) -> dict[str, str]:
     if args.provider == "tbank":
         token = args.token or getpass.getpass("T-Bank Invest token: ")
         return {"token": _required_text(token, "token")}
-    api_key = args.api_key or input("Binance API key: ").strip()
-    api_secret = args.api_secret or getpass.getpass("Binance API secret: ")
+    label = "OKX" if args.provider == "okx" else "Binance"
+    api_key = args.api_key or input(f"{label} API key: ").strip()
+    api_secret = args.api_secret or getpass.getpass(f"{label} API secret: ")
+    if args.provider == "okx":
+        passphrase = args.passphrase or getpass.getpass("OKX API passphrase: ")
+        return {
+            "apiKey": _required_text(api_key, "api_key"),
+            "apiSecret": _required_text(api_secret, "api_secret"),
+            "passphrase": _required_text(passphrase, "passphrase"),
+        }
     return {
         "apiKey": _required_text(api_key, "api_key"),
         "apiSecret": _required_text(api_secret, "api_secret"),
@@ -294,8 +304,6 @@ def _risk_policy_from_args(args: argparse.Namespace) -> RiskPolicy:
 def _optional_decimal_arg(value: object, name: str):
     if value is None:
         return None
-    from decimal import Decimal
-
     return Decimal(str(value))
 
 

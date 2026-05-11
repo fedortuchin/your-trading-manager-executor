@@ -127,6 +127,22 @@ def test_risk_rejects_futures_margin_mode_not_allowed() -> None:
     assert decision.reason_code == "risk_futures_margin_mode_not_allowed"
 
 
+def test_risk_applies_futures_margin_gate_to_okx_swap() -> None:
+    command = _command(market="okx_swap")
+    command["commandPayload"]["marginMode"] = "isolated"
+
+    decision = evaluate_command_risk(
+        command,
+        execution_mode="real",
+        policy=_policy(paper_only=False, allowed_markets=("okx_swap",)),
+        state=RiskState(realized_loss_by_date={}),
+        now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
+    )
+
+    assert decision.passed is False
+    assert decision.reason_code == "risk_futures_margin_mode_not_allowed"
+
+
 def test_risk_rejects_symbol_position_limit() -> None:
     command = _command()
     command["commandPayload"]["projectedPositionNotional"] = "5001"
@@ -160,13 +176,17 @@ def test_risk_rejects_futures_reduce_only_disabled_for_close() -> None:
     assert decision.reason_code == "risk_futures_reduce_only_required"
 
 
-def _policy(*, paper_only: bool = True) -> RiskPolicy:
+def _policy(
+    *,
+    paper_only: bool = True,
+    allowed_markets: tuple[str, ...] = ("usdm_futures",),
+) -> RiskPolicy:
     return RiskPolicy(
         configured=True,
         enabled=True,
         kill_switch=False,
         paper_only=paper_only,
-        allowed_markets=("usdm_futures",),
+        allowed_markets=allowed_markets,
         allowed_margin_modes=("cross",),
         allowed_symbols=("BTCUSDT", "SBER"),
         allowed_order_types=("limit", "market"),
@@ -179,12 +199,12 @@ def _policy(*, paper_only: bool = True) -> RiskPolicy:
     )
 
 
-def _command() -> dict[str, object]:
+def _command(*, market: str = "usdm_futures") -> dict[str, object]:
     return {
         "commandPayload": {
             "leverage": "1",
             "marginMode": "cross",
-            "market": "usdm_futures",
+            "market": market,
             "orderNotional": "100",
             "orderType": "limit",
             "positionEffect": "open",

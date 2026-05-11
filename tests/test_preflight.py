@@ -7,6 +7,7 @@ from typing import Any
 import ytm_executor.preflight as preflight_module
 from ytm_executor.adapters import BrokerAdapterResult
 from ytm_executor.binance_futures import BINANCE_USDM_FUTURES_MAINNET_ORDER_TEST_ADAPTER
+from ytm_executor.okx_swap import OKX_SWAP_MAINNET_ORDER_PRECHECK_ADAPTER
 from ytm_executor.preflight import preflight_command
 from ytm_executor.risk import RiskPolicy, RiskState
 from ytm_executor.secret_store import CredentialSummary
@@ -40,6 +41,9 @@ def test_preflight_acknowledges_external_paper_without_order_placement() -> None
                 "clientOrderId": "ytm_command_1",
                 "executionMode": "external_paper",
                 "limitPrice": "100",
+                "leverage": "1",
+                "marginMode": "cross",
+                "market": "usdm_futures",
                 "notional": "100",
                 "orderType": "limit",
                 "positionEffect": "open",
@@ -329,6 +333,65 @@ def test_preflight_binance_futures_validate_only_then_rejects_real_placement(
     assert "binance-private-secret" not in repr(decision.result_payload)
 
 
+def test_preflight_okx_swap_precheck_then_rejects_real_placement(monkeypatch) -> None:
+    command = _leased_command(provider="okx", execution_mode="real")
+    command["command"]["symbol"] = "BTC-USDT-SWAP"
+    command["command"]["commandPayload"]["adapter"] = OKX_SWAP_MAINNET_ORDER_PRECHECK_ADAPTER
+    command["command"]["commandPayload"]["market"] = "okx_swap"
+    command["command"]["commandPayload"]["quantity"] = "1"
+    seen: dict[str, Any] = {}
+
+    class FakeOkxSwapAdapter:
+        def __init__(self, *, api_key: str, api_secret: str, passphrase: str) -> None:
+            seen["api_key"] = api_key
+            seen["api_secret"] = api_secret
+            seen["passphrase"] = passphrase
+
+        def prepare_order(self, request):
+            seen["request"] = request
+            return BrokerAdapterResult(
+                status="acknowledged",
+                payload={
+                    "adapter": OKX_SWAP_MAINNET_ORDER_PRECHECK_ADAPTER,
+                    "clientOrderId": "ytm_okx_1",
+                    "executorAction": "order_precheck_validated",
+                    "mainnet": True,
+                    "market": "okx_swap",
+                    "provider": "okx",
+                },
+            )
+
+    monkeypatch.setattr(preflight_module, "OkxSwapMainnetOrderPrecheckAdapter", FakeOkxSwapAdapter)
+
+    decision = preflight_command(
+        command,
+        local_credentials=(CredentialSummary(provider="okx", name="main"),),
+        local_secret_resolver=lambda provider, name: {
+            "apiKey": f"{provider}-{name}-public",
+            "apiSecret": "okx-private-secret",
+            "passphrase": "okx-passphrase",
+        },
+        risk_policy=_risk_policy(paper_only=False, market="okx_swap", symbol="BTC-USDT-SWAP"),
+        risk_state=_risk_state(),
+        validation_summaries=(
+            _validation(
+                provider="okx",
+                checked_at="2026-05-10T10:00:00Z",
+                trading_allowed=False,
+            ),
+        ),
+        now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
+    )
+
+    assert decision.status == "rejected"
+    assert decision.result_payload["preflightReasonCode"] == "real_execution_disabled"
+    assert decision.result_payload["adapterPreflight"] == "passed"
+    assert decision.result_payload["adapterResult"]["executorAction"] == "order_precheck_validated"
+    assert seen["api_secret"] == "okx-private-secret"
+    assert "okx-private-secret" not in repr(decision.result_payload)
+    assert "okx-passphrase" not in repr(decision.result_payload)
+
+
 def _leased_command(*, provider: str, execution_mode: str) -> dict[str, object]:
     return {
         "command": {
@@ -376,19 +439,25 @@ def _validation(
     }
 
 
-def _risk_policy(*, kill_switch: bool = False, paper_only: bool = True) -> RiskPolicy:
+def _risk_policy(
+    *,
+    kill_switch: bool = False,
+    paper_only: bool = True,
+    market: str = "usdm_futures",
+    symbol: str = "BTCUSDT",
+) -> RiskPolicy:
     return RiskPolicy(
         configured=True,
         enabled=True,
         kill_switch=kill_switch,
         paper_only=paper_only,
-        allowed_markets=("usdm_futures",),
+        allowed_markets=(market,),
         allowed_margin_modes=("cross",),
-        allowed_symbols=("BTCUSDT",),
+        allowed_symbols=(symbol,),
         allowed_order_types=("limit",),
         max_order_notional=Decimal("1000"),
         max_position_notional=Decimal("5000"),
-        max_symbol_notional={"BTCUSDT": Decimal("5000")},
+        max_symbol_notional={symbol: Decimal("5000")},
         max_daily_loss=Decimal("250"),
         max_leverage=Decimal("1"),
         position_mode="one_way",

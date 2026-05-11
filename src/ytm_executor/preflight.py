@@ -13,6 +13,10 @@ from ytm_executor.binance_futures import (
     BinanceUsdmFuturesMainnetOrderTestAdapter,
 )
 from ytm_executor.guards import SecretFieldError, reject_secret_fields
+from ytm_executor.okx_swap import (
+    OKX_SWAP_MAINNET_ORDER_PRECHECK_ADAPTER,
+    OkxSwapMainnetOrderPrecheckAdapter,
+)
 from ytm_executor.risk import (
     RiskPolicy,
     RiskState,
@@ -22,6 +26,12 @@ from ytm_executor.risk import (
 from ytm_executor.secret_store import CredentialSummary
 
 VALIDATION_TTL_SECONDS = 24 * 60 * 60
+VALIDATE_ONLY_REAL_ADAPTERS = frozenset(
+    {
+        BINANCE_USDM_FUTURES_MAINNET_ORDER_TEST_ADAPTER,
+        OKX_SWAP_MAINNET_ORDER_PRECHECK_ADAPTER,
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,10 +101,7 @@ def preflight_command(
             str(exc),
             extra={"adapterPreflight": "failed", "riskPreflight": "passed"},
         )
-    if (
-        execution_mode == "real"
-        and _adapter_name(command) != BINANCE_USDM_FUTURES_MAINNET_ORDER_TEST_ADAPTER
-    ):
+    if execution_mode == "real" and _adapter_name(command) not in VALIDATE_ONLY_REAL_ADAPTERS:
         return _reject(
             "real_execution_disabled",
             "real execution is disabled in this executor build",
@@ -234,6 +241,13 @@ def _adapter_for_command(
     local_secret_resolver: Callable[[str, str], dict[str, str]] | None,
 ):
     adapter_name = _adapter_name(command)
+    if adapter_name == OKX_SWAP_MAINNET_ORDER_PRECHECK_ADAPTER:
+        return _okx_adapter_for_command(
+            command,
+            execution_mode=execution_mode,
+            provider=provider,
+            local_secret_resolver=local_secret_resolver,
+        )
     if adapter_name != BINANCE_USDM_FUTURES_MAINNET_ORDER_TEST_ADAPTER:
         return DisabledBrokerAdapter(provider=provider)
     if provider != "binance":
@@ -251,6 +265,33 @@ def _adapter_for_command(
             "local Binance API key and secret are required for Futures mainnet adapter"
         )
     return BinanceUsdmFuturesMainnetOrderTestAdapter(api_key=api_key, api_secret=api_secret)
+
+
+def _okx_adapter_for_command(
+    command: dict[str, Any],
+    *,
+    execution_mode: str,
+    provider: str,
+    local_secret_resolver: Callable[[str, str], dict[str, str]] | None,
+):
+    if provider != "okx":
+        raise ValueError("OKX SWAP mainnet adapter requires provider=okx")
+    if execution_mode != "real":
+        raise ValueError("OKX SWAP order precheck requires executionMode=real")
+    if local_secret_resolver is None:
+        raise ValueError("local OKX credential is required for SWAP mainnet adapter")
+    credential_name = _text(command.get("credentialName")) or "main"
+    secret = local_secret_resolver(provider, credential_name)
+    api_key = _text(secret.get("apiKey"))
+    api_secret = _text(secret.get("apiSecret"))
+    passphrase = _text(secret.get("passphrase"))
+    if not api_key or not api_secret or not passphrase:
+        raise ValueError("local OKX API key, secret, and passphrase are required")
+    return OkxSwapMainnetOrderPrecheckAdapter(
+        api_key=api_key,
+        api_secret=api_secret,
+        passphrase=passphrase,
+    )
 
 
 def _adapter_name(command: dict[str, Any]) -> str:

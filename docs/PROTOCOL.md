@@ -34,7 +34,7 @@ Heartbeat may report non-secret local credential metadata:
 
 ```json
 {
-  "clientVersion": "0.5.0",
+  "clientVersion": "0.6.0",
   "heartbeatStatus": "online",
   "capabilities": {
     "leases": true,
@@ -91,6 +91,17 @@ USD-M Futures mainnet `exchangeInfo`, normalize price/quantity to symbol filters
 quantity, price, and notional, and call `test_order`. This is a validation-only broker call and
 does not place an order; after the validate-only call, the executor still rejects placement with
 `real_execution_disabled` until real order adapters are explicitly enabled.
+
+For OKX `real`, a command may explicitly request
+`commandPayload.adapter=okx_swap_mainnet_order_precheck`. The executor then uses the local OKX
+credential and `python-okx` to read SWAP instrument rules, normalize contract size and price, and
+call `POST /api/v5/trade/order-precheck`. Plain USDT symbols such as `BTCUSDT` are mapped to OKX
+SWAP ids such as `BTC-USDT-SWAP`; if `quantity` is absent, contract size is derived from
+`orderNotional` and `priceReference`. This is a validation-only broker call and does not place an
+order; after the validate-only call, the executor still rejects placement with
+`real_execution_disabled` until real order adapters are explicitly enabled. OKX documents
+`order-precheck` as Trade-permission and applicable to multi-currency margin mode and portfolio
+margin mode.
 
 ## Result
 

@@ -11,13 +11,17 @@ Current foundation build:
   - custom deployments: the host passed to `ytm-executor enroll --server-url`
 - Optional validate-only broker API egress when the user runs `ytm-executor broker validate`:
   - Binance USD-M Futures REST: `https://fapi.binance.com`
+  - OKX REST: `https://www.okx.com`
   - T-Bank Invest gRPC: `invest-public-api.tinkoff.ru:443`
-- Optional Binance real-mode validate-only adapter egress when a command explicitly requests
-  `binance_usdm_futures_mainnet_order_test`:
+- Optional real-mode validate-only adapter egress when a command explicitly requests an enabled
+  precheck adapter:
   - Binance USD-M Futures mainnet REST: `https://fapi.binance.com`
+  - OKX SWAP mainnet REST when a command explicitly requests `okx_swap_mainnet_order_precheck`:
+    `https://www.okx.com`
 - Continuous `ytm-executor run` only needs the configured YTM server until real broker adapters are
   enabled, except for explicit validate-only adapter calls such as Binance USD-M Futures mainnet
-  `exchangeInfo` plus `test_order`.
+  `exchangeInfo` plus `test_order` or OKX SWAP mainnet `account/instruments` plus
+  `trade/order-precheck`.
 - Reconciliation snapshot upload sends sanitized provider state only to the configured YTM server.
 - Local risk policy and risk state are read from the executor host filesystem and do not require
   network access. YTM receives only sanitized risk summary counts and mode flags in heartbeat.
@@ -52,6 +56,10 @@ selected broker API domains. Expected examples:
   executor adapter boundary. The current Binance USD-M Futures mainnet adapter uses the official
   `binance-sdk-derivatives-trading-usds-futures==10.2.0` package, reads `exchangeInfo` for
   pre-trade normalization, and calls `test_order`, not `new_order`.
+- OKX: OKX REST API domain for the user's registered region. The current OKX SWAP mainnet adapter
+  uses `python-okx==0.4.1`, reads `account/instruments`, and calls `trade/order-precheck`, not
+  `trade/order`. The first build uses the standard `https://www.okx.com` domain; EU, US, AU, or
+  other regional OKX accounts may need a future explicit domain setting.
 - T-Bank Invest: T-Bank Invest API endpoints configured by the adapter.
 
 Broker API hosts must be explicit adapter configuration, not YTM-provided secret-bearing payloads.

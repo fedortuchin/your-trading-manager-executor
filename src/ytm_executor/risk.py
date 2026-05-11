@@ -17,7 +17,8 @@ from ytm_executor.state import DEFAULT_HOME
 DEFAULT_RISK_POLICY_FILE = DEFAULT_HOME / "risk-policy.json"
 DEFAULT_RISK_STATE_FILE = DEFAULT_HOME / "risk-state.json"
 SUPPORTED_ORDER_TYPES = frozenset({"limit", "market", "stop", "stop_limit", "stop_market"})
-SUPPORTED_MARKETS = frozenset({"usdm_futures"})
+SUPPORTED_MARKETS = frozenset({"okx_swap", "usdm_futures"})
+FUTURES_MARKETS = frozenset({"okx_swap", "usdm_futures"})
 SUPPORTED_MARGIN_MODES = frozenset({"cross", "isolated"})
 SUPPORTED_POSITION_MODES = frozenset({"one_way"})
 
@@ -342,7 +343,7 @@ def policy_completeness_blocks(policy: RiskPolicy) -> list[str]:
         blocks.append("local risk policy requires maxPositionNotional before execution")
     if policy.max_daily_loss is None:
         blocks.append("local risk policy requires maxDailyLoss before execution")
-    if "usdm_futures" in policy.allowed_markets:
+    if set(policy.allowed_markets) & FUTURES_MARKETS:
         if not policy.allowed_margin_modes:
             blocks.append("local futures risk policy requires allowedMarginModes before execution")
         if policy.position_mode != "one_way":
@@ -368,7 +369,7 @@ def _evaluate_futures_risk(
     market: str,
     policy: RiskPolicy,
 ) -> RiskDecision | None:
-    if market != "usdm_futures":
+    if market not in FUTURES_MARKETS:
         return None
     if policy.position_mode != "one_way":
         return _block(

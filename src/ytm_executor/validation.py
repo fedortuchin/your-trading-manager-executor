@@ -23,6 +23,17 @@ class JsonGetTransport(Protocol):
     ) -> dict[str, Any]: ...
 
 
+class OkxAccountApi(Protocol):
+    def get_account_config(self) -> dict[str, Any]: ...
+    def get_account_balance(self, ccy: str = "") -> dict[str, Any]: ...
+    def get_positions(
+        self,
+        instType: str = "",
+        instId: str = "",
+        posId: str = "",
+    ) -> dict[str, Any]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class UrlLibJsonGetTransport:
     def get_json(
@@ -57,6 +68,7 @@ def validate_broker_credential(
     secret: dict[str, str],
     now: datetime | None = None,
     transport: JsonGetTransport | None = None,
+    okx_account_api: OkxAccountApi | None = None,
 ) -> dict[str, Any]:
     normalized_provider = _required_text(provider, "provider")
     normalized_name = _required_text(name, "name")
@@ -67,6 +79,13 @@ def validate_broker_credential(
             secret=secret,
             checked_at=checked_at,
             transport=transport or UrlLibJsonGetTransport(),
+        )
+    if normalized_provider == "okx":
+        return _validate_okx(
+            name=normalized_name,
+            secret=secret,
+            checked_at=checked_at,
+            account_api=okx_account_api,
         )
     if normalized_provider == "tbank":
         return _validate_tbank(name=normalized_name, secret=secret, checked_at=checked_at)
@@ -215,6 +234,86 @@ def _validate_tbank(*, name: str, secret: dict[str, str], checked_at: str) -> di
         },
         warnings=warnings,
     )
+
+
+def _validate_okx(
+    *,
+    name: str,
+    secret: dict[str, str],
+    checked_at: str,
+    account_api: OkxAccountApi | None,
+) -> dict[str, Any]:
+    api = account_api or _build_okx_account_api(secret)
+    try:
+        config = _okx_single_data(api.get_account_config(), "account_config")
+        balances = _okx_data(api.get_account_balance(), "account_balance")
+        positions = _okx_data(api.get_positions(instType="SWAP"), "positions")
+    except BrokerValidationError as exc:
+        return _failed_provider_summary(
+            provider="okx",
+            name=name,
+            checked_at=checked_at,
+            failure_reason=str(exc) or "broker_request_failed",
+        )
+    account_level = str(config.get("acctLv") or "")
+    position_mode = str(config.get("posMode") or "")
+    fingerprint_parts = [
+        account_level,
+        position_mode,
+        str(len(balances)),
+        str(len(positions)),
+    ]
+    return _summary(
+        provider="okx",
+        name=name,
+        checked_at=checked_at,
+        status="passed",
+        account_fingerprint=_fingerprint("okx", fingerprint_parts),
+        permissions={
+            "accountReadable": True,
+            "brokerAccountType": "OKX",
+            "market": "okx_swap",
+            "positionCount": len(positions),
+            "tradingAllowed": False,
+            "tradingPermissionCheck": "order_precheck_required",
+            "withdrawalsAllowed": False,
+        },
+        warnings=["trade_permission_not_verified_by_read_only_validation"],
+    )
+
+
+def _build_okx_account_api(secret: dict[str, str]) -> OkxAccountApi:
+    try:
+        import okx.Account as Account
+    except ImportError as exc:
+        raise BrokerValidationError("adapter_dependency_missing") from exc
+    api_key = _required_text(secret.get("apiKey"), "api_key")
+    api_secret = _required_text(secret.get("apiSecret"), "api_secret")
+    passphrase = _required_text(secret.get("passphrase"), "passphrase")
+    return Account.AccountAPI(api_key, api_secret, passphrase, False, "0")
+
+
+def _okx_single_data(response: dict[str, Any], endpoint: str) -> dict[str, Any]:
+    data = _okx_data(response, endpoint)
+    if not data:
+        raise BrokerValidationError(f"{endpoint}_empty")
+    return data[0]
+
+
+def _okx_data(response: dict[str, Any], endpoint: str) -> list[dict[str, Any]]:
+    if not isinstance(response, dict):
+        raise BrokerValidationError("broker_returned_non_object")
+    code = str(response.get("code") or "")
+    if code != "0":
+        if code in {"50113", "50119"}:
+            raise BrokerValidationError("credential_rejected")
+        raise BrokerValidationError("broker_request_failed")
+    data = response.get("data", [])
+    if data in ("", None):
+        data = []
+    if not isinstance(data, list) or not all(isinstance(item, dict) for item in data):
+        raise BrokerValidationError(f"{endpoint}_invalid")
+    return [dict(item) for item in data]
 
 
 def _failed_provider_summary(

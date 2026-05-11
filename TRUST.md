@@ -17,6 +17,8 @@ host and must not be sent to YTM Cloud.
 ## What YTM Cloud Must Not See
 
 - Binance API secrets;
+- OKX API secrets;
+- OKX API passphrases;
 - T-Bank Invest tokens;
 - Authorization headers;
 - private keys;
@@ -27,7 +29,7 @@ host and must not be sent to YTM Cloud.
 ## How To Verify
 
 1. Inspect the public source code in this repository.
-2. Install from a pinned release tag, for example `v0.5.0`, not from `main`.
+2. Install from a pinned release tag, for example `v0.6.0`, not from `main`.
 3. Prefer a pinned image digest for production:
 
    ```text
@@ -43,7 +45,7 @@ host and must not be sent to YTM Cloud.
 5. Verify the Docker image signature with cosign:
 
    ```bash
-   cosign verify ghcr.io/fedortuchin/your-trading-manager-executor:v0.5.0 \
+   cosign verify ghcr.io/fedortuchin/your-trading-manager-executor:v0.6.0 \
      --certificate-identity-regexp 'https://github.com/fedortuchin/your-trading-manager-executor/.github/workflows/ci.yml@.*' \
      --certificate-oidc-issuer https://token.actions.githubusercontent.com
    ```
@@ -65,7 +67,13 @@ host and must not be sent to YTM Cloud.
 - Signed releases and SBOMs improve supply-chain verification, but users still need source review,
   pinned images, network allowlisting, and hardened infrastructure.
 - The current foundation build has no real order placement adapters. Binance Futures `real` commands
-  can reach validate-only `test_order`, then are locally rejected by executor preflight.
+  can reach validate-only `test_order`, and OKX SWAP `real` commands can reach validate-only
+  `order-precheck`; both are then locally rejected by executor preflight.
+- OKX `order-precheck` requires Trade permission and is documented by OKX for multi-currency margin
+  mode and portfolio margin mode. Unsupported account modes fail closed at broker precheck.
+- OKX SWAP commands may carry YTM symbols such as `BTCUSDT`; the executor maps them to native OKX
+  SWAP ids and derives contract size from notional plus price reference when no contract quantity is
+  provided.
 - The local risk policy is mandatory for provider-backed command preflight. Missing policy,
   `killSwitch=true`, incomplete limits, unsupported market/margin mode/symbol/order type, excessive
   notional, excessive projected or per-symbol position, daily loss breach, excessive leverage,

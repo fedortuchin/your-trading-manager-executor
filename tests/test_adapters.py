@@ -18,6 +18,7 @@ def test_build_order_request_uses_existing_client_order_id() -> None:
     assert request.order_type == "limit"
     assert request.quantity == Decimal("0.01")
     assert request.limit_price == Decimal("100")
+    assert request.price_reference == Decimal("100")
 
 
 def test_deterministic_client_order_id_is_stable_and_bounded() -> None:
@@ -49,6 +50,7 @@ def _command(
             "orderType": "limit",
             "positionEffect": "open",
             "price": "100",
+            "priceReference": "100",
             "quantity": "0.01",
         },
         "id": command_id,

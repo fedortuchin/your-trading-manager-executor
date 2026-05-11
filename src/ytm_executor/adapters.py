@@ -33,7 +33,11 @@ class BrokerOrderRequest:
     notional: Decimal | None
     limit_price: Decimal | None
     stop_price: Decimal | None
+    price_reference: Decimal | None
     time_in_force: str | None
+    market: str | None = None
+    margin_mode: str | None = None
+    leverage: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,7 +99,15 @@ def build_order_request(command: dict[str, Any], *, execution_mode: str) -> Brok
         ),
         limit_price=_optional_decimal(_first(command, payload, ("price", "limitPrice"))),
         stop_price=_optional_decimal(_first(command, payload, ("stopPrice", "triggerPrice"))),
+        price_reference=_optional_decimal(
+            _first(command, payload, ("priceReference", "entryPriceReference", "markPrice"))
+        ),
         time_in_force=_optional_text(_first(command, payload, ("timeInForce",))),
+        market=_optional_text(
+            _first(command, payload, ("market", "brokerMarket", "exchangeMarket")),
+        ),
+        margin_mode=_optional_text(_first(command, payload, ("marginMode", "mgnMode", "tdMode"))),
+        leverage=_optional_decimal(_first(command, payload, ("leverage",))),
     )
     _validate_order_request(request)
     return request
@@ -129,8 +141,16 @@ def order_request_public_payload(request: BrokerOrderRequest) -> dict[str, Any]:
         payload["limitPrice"] = _decimal_text(request.limit_price)
     if request.stop_price is not None:
         payload["stopPrice"] = _decimal_text(request.stop_price)
+    if request.price_reference is not None:
+        payload["priceReference"] = _decimal_text(request.price_reference)
     if request.time_in_force:
         payload["timeInForce"] = request.time_in_force
+    if request.market:
+        payload["market"] = request.market
+    if request.margin_mode:
+        payload["marginMode"] = request.margin_mode
+    if request.leverage is not None:
+        payload["leverage"] = _decimal_text(request.leverage)
     reject_secret_fields(payload)
     return payload
 
