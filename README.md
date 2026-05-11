@@ -33,7 +33,8 @@ Implemented:
   started with explicit real-order enablement;
 - command lease polling;
 - sanitized provider reconciliation snapshot upload to YTM;
-- OKX SWAP read-only reconciliation capture for balances, positions, and open orders;
+- OKX SWAP read-only reconciliation capture for balances, positions, open orders, order history,
+  and fills;
 - client-side rejection of secret-like fields in YTM API payloads;
 - Docker-first VPS installer;
 - GHCR Docker image build, cosign signing, SBOM generation, and release checksums in CI;
@@ -42,7 +43,7 @@ Implemented:
 Not implemented yet:
 
 - Binance/T-Bank real order placement adapters;
-- provider fill upload and full reconciliation application.
+- provider-specific streaming reconciliation.
 
 Binance adapter work uses the official Binance Python connector repository behind the executor
 adapter boundary. The current pinned package is
@@ -269,9 +270,9 @@ ytm-executor reconciliation upload-snapshot \
   --payload-file reconciliation.json
 ```
 
-The payload file must be a JSON object without secret-like fields. Current snapshot upload records
-provider state and lets YTM mark drift/reconciliation-required state; provider fill ingestion and
-full automatic state application remain later work.
+The payload file must be a JSON object without secret-like fields. YTM stores the sanitized
+snapshot and can apply matched provider orders, idempotent fills, provider-backed positions, fees,
+realized PnL, and close-source labels when the payload includes exact provider fill/order data.
 
 Capture and upload an OKX SWAP read-only snapshot directly from the executor host:
 
@@ -279,9 +280,10 @@ Capture and upload an OKX SWAP read-only snapshot directly from the executor hos
 ytm-executor reconciliation capture-okx --execution-mode external_paper
 ```
 
-This calls OKX `account/balance`, `account/positions`, and `trade/orders-pending`, then uploads
-only normalized balances, positions, and open orders. Broker credentials stay in the local secret
-store and are not included in the YTM payload.
+This calls OKX `account/balance`, `account/positions`, `trade/orders-pending`,
+`trade/orders-history`, and `trade/fills-history`, then uploads only normalized balances, positions,
+orders, order history, and fills. Broker credentials stay in the local secret store and are not
+included in the YTM payload.
 
 When a command is leased, the executor runs local preflight before acknowledging anything:
 
@@ -310,7 +312,7 @@ YTM Cloud may receive:
 - sanitized execution results.
 - sanitized broker credential validation status.
 - sanitized provider reconciliation snapshots.
-- OKX read-only reconciliation state: balances, positions, and open orders.
+- OKX read-only reconciliation state: balances, positions, open orders, order history, and fills.
 
 YTM Cloud must not receive:
 

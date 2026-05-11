@@ -19,6 +19,17 @@ class OkxReconciliationApi(Protocol):
         pos_id: str = "",
     ) -> dict[str, Any]: ...
     def get_order_list(self, inst_type: str = "", state: str = "") -> dict[str, Any]: ...
+    def get_orders_history(
+        self,
+        inst_type: str,
+        state: str = "",
+        limit: str = "",
+    ) -> dict[str, Any]: ...
+    def get_fills_history(
+        self,
+        inst_type: str,
+        limit: str = "",
+    ) -> dict[str, Any]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,10 +55,20 @@ class OkxSwapReconciliationAdapter:
             api.get_order_list(inst_type="SWAP"),
             "orders_pending",
         )
+        order_history = _okx_response_data(
+            api.get_orders_history(inst_type="SWAP", limit="100"),
+            "orders_history",
+        )
+        fills = _okx_response_data(
+            api.get_fills_history(inst_type="SWAP", limit="100"),
+            "fills_history",
+        )
         snapshot = {
             "balances": _sanitize_balances(balances),
             "capturedAt": _iso_z(captured_at),
+            "fills": _sanitize_fills(fills),
             "market": "okx_swap",
+            "orderHistory": _sanitize_orders(order_history),
             "openOrders": _sanitize_orders(orders),
             "positions": _sanitize_positions(positions),
             "provider": "okx",
@@ -80,6 +101,21 @@ class OkxSdkReconciliationApi:
 
     def get_order_list(self, inst_type: str = "", state: str = "") -> dict[str, Any]:
         return self.trade_api.get_order_list(instType=inst_type, state=state)
+
+    def get_orders_history(
+        self,
+        inst_type: str,
+        state: str = "",
+        limit: str = "",
+    ) -> dict[str, Any]:
+        return self.trade_api.get_orders_history(instType=inst_type, state=state, limit=limit)
+
+    def get_fills_history(
+        self,
+        inst_type: str,
+        limit: str = "",
+    ) -> dict[str, Any]:
+        return self.trade_api.get_fills_history(instType=inst_type, limit=limit)
 
 
 def _build_mainnet_reconciliation_api(
@@ -192,6 +228,40 @@ def _sanitize_orders(items: list[dict[str, Any]]) -> list[dict[str, str | bool]]
     )
     reject_secret_fields(orders)
     return orders
+
+
+def _sanitize_fills(items: list[dict[str, Any]]) -> list[dict[str, str | bool]]:
+    fills: list[dict[str, str | bool]] = []
+    for item in items:
+        inst_id = _text(item.get("instId"))
+        fills.append(
+            _compact(
+                {
+                    "clientOrderId": _text(item.get("clOrdId")),
+                    "feeAmount": _text(item.get("fee")),
+                    "feeCurrency": _text(item.get("feeCcy")),
+                    "fillId": _text(item.get("billId") or item.get("tradeId")),
+                    "fillPrice": _text(item.get("fillPx")),
+                    "fillQuantity": _text(item.get("fillSz")),
+                    "fillTime": _text(item.get("fillTime") or item.get("ts")),
+                    "instrumentId": inst_id,
+                    "orderType": _text(item.get("ordType")),
+                    "positionSide": _text(item.get("posSide")),
+                    "providerOrderId": _text(item.get("ordId")),
+                    "side": _text(item.get("side")),
+                    "symbol": _plain_swap_symbol(inst_id),
+                }
+            )
+        )
+    fills.sort(
+        key=lambda item: (
+            str(item.get("fillTime", "")),
+            str(item.get("providerOrderId", "")),
+            str(item.get("fillId", "")),
+        )
+    )
+    reject_secret_fields(fills)
+    return fills
 
 
 def _plain_swap_symbol(inst_id: str) -> str:

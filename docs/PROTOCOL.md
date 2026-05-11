@@ -138,7 +138,13 @@ Request contains:
 Broker secrets, API keys, Authorization headers, and token-like fields are rejected before upload.
 The executor can upload a caller-provided JSON snapshot or capture an OKX SWAP read-only snapshot
 itself with `ytm-executor reconciliation capture-okx`. OKX capture calls `account/balance`,
-`account/positions`, and `trade/orders-pending`, normalizes balances, positions, and open orders,
-and uploads that sanitized state to YTM. `ytm-executor run --reconcile-okx` performs the same
-capture periodically. The foundation records snapshots and drift status; full provider fill
-ingestion remains later work.
+`account/positions`, `trade/orders-pending`, `trade/orders-history`, and `trade/fills-history`,
+normalizes balances, positions, open orders, order history, and fills, and uploads that sanitized
+state to YTM. `ytm-executor run --reconcile-okx` performs the same capture periodically.
+
+YTM applies an `ok` snapshot only through deterministic, idempotent rules. Known provider orders can
+move to accepted/partially filled/filled/canceled/rejected states. Provider fills are keyed by
+provider fill id or a synthetic hash and can update provider-backed positions, fees, realized PnL,
+risk release, and close-source labels such as `take_profit`, `stop_loss`, `provider_manual`,
+`provider_liquidation`, `reconciliation`, or `unknown`. Drift snapshots still mark active provider
+orders/positions `reconciliation_required` instead of guessing missing fills.

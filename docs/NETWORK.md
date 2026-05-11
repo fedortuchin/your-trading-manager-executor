@@ -27,7 +27,7 @@ Current foundation build:
   `trade/order-precheck`, and explicit OKX real-order adapter calls.
 - `ytm-executor reconciliation capture-okx` and `ytm-executor run --reconcile-okx` also need OKX
   SWAP read-only REST access to `account/balance`, `account/positions`, and
-  `trade/orders-pending`.
+  `trade/orders-pending`, `trade/orders-history`, and `trade/fills-history`.
 - Reconciliation snapshot upload sends sanitized provider state only to the configured YTM server.
 - Local risk policy and risk state are read from the executor host filesystem and do not require
   network access. YTM receives only sanitized risk summary counts and mode flags in heartbeat.
@@ -65,8 +65,10 @@ selected broker API domains. Expected examples:
 - OKX: OKX REST API domain for the user's registered region. The current OKX SWAP mainnet adapter
   uses `python-okx==0.4.1`, reads `account/instruments`, and calls `trade/order-precheck`.
   The disabled-by-default real adapter also calls `trade/order` after precheck when
-  `--enable-real-orders` is set. The first build uses the standard `https://www.okx.com` domain;
-  EU, US, AU, or other regional OKX accounts may need a future explicit domain setting.
+  `--enable-real-orders` is set. Reconciliation uses read-only account/order/fill endpoints:
+  `account/balance`, `account/positions`, `trade/orders-pending`, `trade/orders-history`, and
+  `trade/fills-history`. The first build uses the standard `https://www.okx.com` domain; EU, US,
+  AU, or other regional OKX accounts may need a future explicit domain setting.
 - T-Bank Invest: T-Bank Invest API endpoints configured by the adapter.
 
 Broker API hosts must be explicit adapter configuration, not YTM-provided secret-bearing payloads.
