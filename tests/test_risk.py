@@ -5,8 +5,6 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
-import pytest
-
 from ytm_executor.risk import (
     RiskPolicy,
     RiskState,
@@ -48,29 +46,54 @@ def test_risk_public_summary_does_not_expose_symbol_list() -> None:
     assert "BTCUSDT" not in repr(summary)
 
 
-def test_risk_policy_rejects_incomplete_execution_policy(tmp_path: Path) -> None:
+def test_risk_policy_allows_skipped_local_limits(tmp_path: Path) -> None:
     policy_file = tmp_path / "risk-policy.json"
 
-    with pytest.raises(ValueError, match="allowedSymbols"):
-        write_risk_policy(
-            policy_file,
-            RiskPolicy(
-                configured=True,
-                enabled=True,
-                kill_switch=False,
-                paper_only=True,
-                allowed_markets=("usdm_futures",),
-                allowed_margin_modes=("cross",),
-                allowed_symbols=(),
-                allowed_order_types=("limit",),
-                max_order_notional=Decimal("1000"),
-                max_position_notional=Decimal("5000"),
-                max_symbol_notional={},
-                max_daily_loss=Decimal("250"),
-                max_leverage=Decimal("1"),
-                position_mode="one_way",
-            ),
-        )
+    write_risk_policy(
+        policy_file,
+        RiskPolicy(
+            configured=True,
+            enabled=True,
+            kill_switch=False,
+            paper_only=True,
+            allowed_markets=(),
+            allowed_margin_modes=(),
+            allowed_symbols=(),
+            allowed_order_types=(),
+            max_order_notional=None,
+            max_position_notional=None,
+            max_symbol_notional={},
+            max_daily_loss=None,
+            max_leverage=Decimal("1"),
+            position_mode="one_way",
+        ),
+    )
+
+    decision = evaluate_command_risk(
+        _command(),
+        execution_mode="external_paper",
+        policy=read_risk_policy(policy_file),
+        state=RiskState(realized_loss_by_date={}),
+        now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
+    )
+
+    assert decision.passed is True
+
+
+def test_risk_rejects_symbol_when_local_symbol_limit_is_configured() -> None:
+    command = _command()
+    command["symbol"] = "ETHUSDT"
+
+    decision = evaluate_command_risk(
+        command,
+        execution_mode="external_paper",
+        policy=_policy(),
+        state=RiskState(realized_loss_by_date={}),
+        now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
+    )
+
+    assert decision.passed is False
+    assert decision.reason_code == "risk_symbol_not_allowed"
 
 
 def test_risk_allows_command_inside_local_limits() -> None:

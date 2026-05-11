@@ -215,17 +215,17 @@ def evaluate_command_risk(
     )
     if not symbol:
         return _block("risk_symbol_missing", "command instrument identifier is missing")
-    if symbol not in policy.allowed_symbols:
+    if policy.allowed_symbols and symbol not in policy.allowed_symbols:
         return _block("risk_symbol_not_allowed", "command instrument is not allowed locally")
 
     order_type = _normalized_order_type(_first(command, payload, ("orderType", "type")))
-    if not order_type:
+    if policy.allowed_order_types and not order_type:
         return _block("risk_order_type_missing", "command order type is missing")
-    if order_type not in policy.allowed_order_types:
+    if policy.allowed_order_types and order_type not in policy.allowed_order_types:
         return _block("risk_order_type_not_allowed", "command order type is not allowed locally")
 
     order_notional = _order_notional(command, payload)
-    if order_notional is None:
+    if policy.max_order_notional is not None and order_notional is None:
         return _block("risk_order_notional_missing", "command order notional is missing")
     if policy.max_order_notional is not None and order_notional > policy.max_order_notional:
         return _block("risk_order_notional_exceeded", "command order notional exceeds local limit")
@@ -236,7 +236,7 @@ def evaluate_command_risk(
     )
     if not market:
         return _block("risk_market_missing", "command market is missing")
-    if market not in policy.allowed_markets:
+    if policy.allowed_markets and market not in policy.allowed_markets:
         return _block("risk_market_not_allowed", "command market is not allowed locally")
     futures_block = _evaluate_futures_risk(
         command=command,
@@ -259,7 +259,11 @@ def evaluate_command_risk(
         ),
         "projectedPositionNotional",
     )
-    if projected_position is None:
+    symbol_limit = policy.max_symbol_notional.get(symbol)
+    if (
+        projected_position is None
+        and (policy.max_position_notional is not None or symbol_limit is not None)
+    ):
         return _block(
             "risk_projected_position_missing",
             "command projected position notional is missing",
@@ -272,7 +276,6 @@ def evaluate_command_risk(
             "risk_projected_position_exceeded",
             "command projected position exceeds local limit",
         )
-    symbol_limit = policy.max_symbol_notional.get(symbol)
     if symbol_limit is not None and projected_position > symbol_limit:
         return _block(
             "risk_symbol_position_exceeded",
@@ -301,8 +304,6 @@ def policy_configuration_errors(policy: RiskPolicy) -> list[str]:
     errors = []
     if not policy.enabled and not policy.kill_switch:
         errors.append("disabled risk policy must keep killSwitch enabled")
-    if not policy.kill_switch:
-        errors.extend(policy_completeness_blocks(policy))
     if policy.max_leverage <= 0:
         errors.append("maxLeverage must be positive")
     invalid_markets = sorted(set(policy.allowed_markets) - SUPPORTED_MARKETS)
@@ -330,31 +331,9 @@ def policy_configuration_errors(policy: RiskPolicy) -> list[str]:
 
 
 def policy_completeness_blocks(policy: RiskPolicy) -> list[str]:
-    blocks = []
-    if not policy.allowed_markets:
-        blocks.append("local risk policy requires allowedMarkets before execution")
-    if not policy.allowed_symbols:
-        blocks.append("local risk policy requires allowedSymbols before execution")
-    if not policy.allowed_order_types:
-        blocks.append("local risk policy requires allowedOrderTypes before execution")
-    if policy.max_order_notional is None:
-        blocks.append("local risk policy requires maxOrderNotional before execution")
-    if policy.max_position_notional is None:
-        blocks.append("local risk policy requires maxPositionNotional before execution")
-    if policy.max_daily_loss is None:
-        blocks.append("local risk policy requires maxDailyLoss before execution")
-    if set(policy.allowed_markets) & FUTURES_MARKETS:
-        if not policy.allowed_margin_modes:
-            blocks.append("local futures risk policy requires allowedMarginModes before execution")
-        if policy.position_mode != "one_way":
-            blocks.append("local futures risk policy supports one_way positionMode only")
-        missing_symbol_limits = [
-            symbol for symbol in policy.allowed_symbols if symbol not in policy.max_symbol_notional
-        ]
-        if missing_symbol_limits:
-            blocks.append(
-                "local futures risk policy requires maxSymbolNotional for every allowed symbol"
-            )
+    blocks: list[str] = []
+    if set(policy.allowed_markets) & FUTURES_MARKETS and policy.position_mode != "one_way":
+        blocks.append("local futures risk policy supports one_way positionMode only")
     return blocks
 
 
@@ -380,9 +359,9 @@ def _evaluate_futures_risk(
         _first(command, payload, ("marginMode", "marginType")),
         default="",
     )
-    if not margin_mode:
+    if policy.allowed_margin_modes and not margin_mode:
         return _block("risk_futures_margin_mode_missing", "command futures margin mode is missing")
-    if margin_mode not in policy.allowed_margin_modes:
+    if policy.allowed_margin_modes and margin_mode not in policy.allowed_margin_modes:
         return _block(
             "risk_futures_margin_mode_not_allowed",
             "command futures margin mode is not allowed locally",

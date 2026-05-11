@@ -11,7 +11,6 @@ The executor rejects leased provider-backed commands when:
 - policy parsing fails;
 - `enabled=false`;
 - `killSwitch=true`;
-- required limits are missing;
 - a command violates the local market, margin mode, symbol, order type, notional, projected
   position, per-symbol position, daily loss, leverage, position mode, or reduce-only rules;
 - `executionMode=real` while `paperOnly=true`.
@@ -20,19 +19,18 @@ The executor rejects leased provider-backed commands when:
 requires the exact `okx_swap_mainnet_order` adapter in the leased command and
 `ytm-executor run --enable-real-orders`; without that runtime flag, `real` remains fail-closed.
 
-## Required Local Limits
+## Optional Local Limits
 
-When `killSwitch=false`, the policy must include:
+When `killSwitch=false`, the policy can include local allowlists and caps. If an allowlist or cap is
+omitted, the executor does not enforce that specific local restriction. YTM Cloud still has to pass
+server-side trading profile risk before manual approval, and the executor still blocks malformed
+commands, unsupported futures position mode, reduce-only mistakes, paper-only real commands, and
+any limit that is configured locally.
 
-- `allowedSymbols`;
-- `allowedOrderTypes`;
-- `allowedMarkets`;
-- for futures/swap markets: `allowedMarginModes`, `positionMode=one_way`, and
-  `maxSymbolNotional` for every allowed symbol;
-- `maxOrderNotional`;
-- `maxPositionNotional`;
-- `maxDailyLoss`;
-- `maxLeverage`.
+The Docker installer has a `--wizard` mode that asks for broker credentials and a short local risk
+flow. It does not ask for per-symbol local allowlists; symbols and daily limits are configured in
+the YTM trading profile before approval. Press Enter on optional local notional/daily-loss caps to
+skip that local cap.
 
 Example:
 
@@ -90,8 +88,8 @@ sudo docker compose run --rm ytm-executor risk init --kill-switch-off \
   --position-mode one_way
 ```
 
-OKX SWAP equivalent uses `okx_swap`. `allowedSymbols` must match the command symbol from YTM.
-The OKX adapter maps plain USDT pairs like `BTCUSDT` to native OKX ids such as
+OKX SWAP equivalent uses `okx_swap`. If `allowedSymbols` is configured manually, it must match the
+command symbol from YTM. The OKX adapter maps plain USDT pairs like `BTCUSDT` to native OKX ids such as
 `BTC-USDT-SWAP` before `order-precheck`. If a command contains `quantity`, OKX treats it as
 contract size; otherwise the adapter can derive contract size from `orderNotional` plus
 `priceReference`:
@@ -119,9 +117,9 @@ ytm-executor risk show
 ## Cloud Cannot Relax It
 
 YTM Cloud sends an approved command. The executor independently loads its local policy and local
-risk state before any future broker adapter can run. Command payloads cannot raise limits, disable
-the kill switch, add markets, add margin modes, change position mode, add symbols, add order types,
-or turn off paper-only mode.
+risk state before any future broker adapter can run. When a local allowlist or cap is configured,
+command payloads cannot raise that limit, disable the kill switch, add markets, add margin modes,
+change position mode, add symbols, add order types, or turn off paper-only mode.
 
 If local risk passes, the executor still has to normalize the command into a broker adapter order
 request with deterministic `clientOrderId`. Invalid adapter requests fail closed before any broker

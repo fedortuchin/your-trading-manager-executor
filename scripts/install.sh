@@ -2,12 +2,22 @@
 set -euo pipefail
 
 INSTALL_DIR="/opt/ytm-executor"
-IMAGE="ghcr.io/fedortuchin/your-trading-manager-executor:v0.7.1"
+IMAGE="ghcr.io/fedortuchin/your-trading-manager-executor:v0.7.2"
 SERVER_URL=""
 ENROLLMENT_TOKEN=""
 BROKER_PROVIDER=""
 VALIDATE_BROKER="false"
 START_SERVICE="true"
+WIZARD="false"
+ENABLE_REAL_ORDERS="false"
+RUN_COMMAND="run"
+WIZARD_MARKETS=""
+WIZARD_MARGIN_MODES=""
+WIZARD_ORDER_TYPES=""
+WIZARD_MAX_ORDER_NOTIONAL=""
+WIZARD_MAX_POSITION_NOTIONAL=""
+WIZARD_MAX_DAILY_LOSS=""
+WIZARD_MAX_LEVERAGE="1"
 
 usage() {
   cat >&2 <<'EOF'
@@ -18,15 +28,18 @@ Options:
   --broker-provider <tbank|binance|okx>
                                       Prompt locally for broker credentials after enrollment.
   --validate-broker                 Validate broker credentials after the local prompt.
-  --image <image>                    Default: ghcr.io/fedortuchin/your-trading-manager-executor:v0.7.1.
+  --wizard                          Prompt for broker credentials and local risk policy.
+  --enable-real-orders              Start the runtime with real order placement enabled.
+  --image <image>                    Default: ghcr.io/fedortuchin/your-trading-manager-executor:v0.7.2.
   --install-dir <path>               Default: /opt/ytm-executor.
   --no-start                         Install and enroll, but do not start the compose service.
   -h, --help                         Show this help.
 
 Example:
-  curl -fsSL https://raw.githubusercontent.com/fedortuchin/your-trading-manager-executor/v0.7.1/scripts/install.sh | sudo bash -s -- \
+  curl -fsSL https://raw.githubusercontent.com/fedortuchin/your-trading-manager-executor/v0.7.2/scripts/install.sh | sudo bash -s -- \
     --server https://trademate.pro \
-    --enrollment-token ytm_enroll_xxx
+    --enrollment-token ytm_enroll_xxx \
+    --wizard
 EOF
 }
 
@@ -57,6 +70,14 @@ while [[ $# -gt 0 ]]; do
       VALIDATE_BROKER="true"
       shift
       ;;
+    --wizard)
+      WIZARD="true"
+      shift
+      ;;
+    --enable-real-orders)
+      ENABLE_REAL_ORDERS="true"
+      shift
+      ;;
     --image)
       IMAGE="${2:-}"
       shift 2
@@ -84,11 +105,6 @@ done
 [[ -n "$SERVER_URL" ]] || fail "--server is required"
 [[ -n "$ENROLLMENT_TOKEN" ]] || fail "--enrollment-token is required"
 [[ -n "$IMAGE" ]] || fail "--image must not be empty"
-[[ "$VALIDATE_BROKER" != "true" || -n "$BROKER_PROVIDER" ]] || fail "--validate-broker requires --broker-provider"
-case "$BROKER_PROVIDER" in
-  ""|"tbank"|"binance"|"okx") ;;
-  *) fail "--broker-provider must be tbank, binance, or okx" ;;
-esac
 
 install_prerequisites() {
   if command -v apt-get >/dev/null 2>&1; then
@@ -148,7 +164,7 @@ services:
   ytm-executor:
     image: ${IMAGE}
     restart: unless-stopped
-    command: run
+    command: ${RUN_COMMAND}
     read_only: true
     tmpfs:
       - /tmp
@@ -185,6 +201,109 @@ configure_broker() {
   fi
 }
 
+prompt_default() {
+  local prompt="$1"
+  local default="$2"
+  local value
+  if [[ -n "$default" ]]; then
+    printf '%s [%s]: ' "$prompt" "$default" > /dev/tty
+  else
+    printf '%s: ' "$prompt" > /dev/tty
+  fi
+  IFS= read -r value < /dev/tty
+  if [[ -z "$value" ]]; then
+    printf '%s' "$default"
+  else
+    printf '%s' "$value"
+  fi
+}
+
+prompt_yes_no() {
+  local prompt="$1"
+  local default="$2"
+  local value
+  value="$(prompt_default "$prompt" "$default")"
+  case "${value,,}" in
+    y|yes|true|1) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+default_market_for_provider() {
+  case "$1" in
+    okx) printf 'okx_swap' ;;
+    binance) printf 'usdm_futures' ;;
+    *) printf '' ;;
+  esac
+}
+
+default_margin_for_provider() {
+  case "$1" in
+    okx|binance) printf 'cross' ;;
+    *) printf '' ;;
+  esac
+}
+
+configure_wizard_inputs() {
+  [[ "$WIZARD" == "true" ]] || return
+  [[ -r /dev/tty ]] || fail "wizard requires an interactive terminal"
+  if [[ -z "$BROKER_PROVIDER" ]]; then
+    BROKER_PROVIDER="$(prompt_default "Broker provider (okx, binance, tbank)" "okx")"
+  fi
+  VALIDATE_BROKER="true"
+  if prompt_yes_no "Enable local real order placement" "no"; then
+    ENABLE_REAL_ORDERS="true"
+  fi
+  WIZARD_MARKETS="$(default_market_for_provider "$BROKER_PROVIDER")"
+  WIZARD_MARGIN_MODES="$(default_margin_for_provider "$BROKER_PROVIDER")"
+  WIZARD_ORDER_TYPES="limit,market"
+  WIZARD_MAX_ORDER_NOTIONAL="$(prompt_default "Optional local max order notional; Enter = no local limit" "")"
+  WIZARD_MAX_POSITION_NOTIONAL="$(prompt_default "Optional local max position notional; Enter = no local limit" "")"
+  WIZARD_MAX_DAILY_LOSS="$(prompt_default "Optional local max daily loss; Enter = no local limit" "")"
+  WIZARD_MAX_LEVERAGE="$(prompt_default "Max leverage" "1")"
+}
+
+append_csv_option() {
+  local option="$1"
+  local values="$2"
+  local item trimmed
+  local -a items
+  [[ -n "$values" ]] || return
+  IFS=',' read -r -a items <<< "$values"
+  for item in "${items[@]}"; do
+    trimmed="$(printf '%s' "$item" | xargs)"
+    [[ -n "$trimmed" ]] || continue
+    RISK_ARGS+=("$option" "$trimmed")
+  done
+}
+
+configure_risk_policy() {
+  [[ "$WIZARD" == "true" ]] || return
+  RISK_ARGS=(risk init --force --kill-switch-off)
+  if [[ "$ENABLE_REAL_ORDERS" == "true" ]]; then
+    RISK_ARGS+=(--allow-real)
+  fi
+  append_csv_option "--allow-market" "$WIZARD_MARKETS"
+  append_csv_option "--allow-margin-mode" "$WIZARD_MARGIN_MODES"
+  append_csv_option "--allow-order-type" "$WIZARD_ORDER_TYPES"
+  [[ -z "$WIZARD_MAX_ORDER_NOTIONAL" ]] || RISK_ARGS+=(--max-order-notional "$WIZARD_MAX_ORDER_NOTIONAL")
+  [[ -z "$WIZARD_MAX_POSITION_NOTIONAL" ]] || RISK_ARGS+=(--max-position-notional "$WIZARD_MAX_POSITION_NOTIONAL")
+  [[ -z "$WIZARD_MAX_DAILY_LOSS" ]] || RISK_ARGS+=(--max-daily-loss "$WIZARD_MAX_DAILY_LOSS")
+  [[ -z "$WIZARD_MAX_LEVERAGE" ]] || RISK_ARGS+=(--max-leverage "$WIZARD_MAX_LEVERAGE")
+  log "writing local risk policy"
+  compose run --rm -T ytm-executor "${RISK_ARGS[@]}"
+}
+
+configure_wizard_inputs
+[[ "$VALIDATE_BROKER" != "true" || -n "$BROKER_PROVIDER" ]] || fail "--validate-broker requires --broker-provider"
+case "$BROKER_PROVIDER" in
+  ""|"tbank"|"binance"|"okx") ;;
+  *) fail "--broker-provider must be tbank, binance, or okx" ;;
+esac
+if [[ "$ENABLE_REAL_ORDERS" == "true" ]]; then
+  RUN_COMMAND="run --enable-real-orders"
+fi
+
 log "installing prerequisites"
 install_prerequisites
 log "installing Docker Compose runtime"
@@ -197,6 +316,7 @@ compose pull
 log "enrolling executor with YTM"
 enroll_executor
 configure_broker
+configure_risk_policy
 if [[ "$START_SERVICE" == "true" ]]; then
   log "starting executor container"
   compose up -d

@@ -6,7 +6,7 @@ SERVICE_GROUP="ytm-executor"
 SERVICE_HOME="/home/${SERVICE_USER}"
 INSTALL_DIR="/opt/ytm-executor"
 REPO_URL="https://github.com/fedortuchin/your-trading-manager-executor.git"
-REPO_REF="v0.6.0"
+REPO_REF="v0.7.2"
 PYTHON_VERSION="3.13"
 SERVER_URL=""
 ENROLLMENT_TOKEN=""
@@ -23,7 +23,7 @@ Options:
   --broker-provider <tbank|binance>  Prompt locally for broker credentials after enrollment.
   --install-dir <path>              Default: /opt/ytm-executor.
   --repo-url <url>                  Default: public GitHub executor repo.
-  --ref <git-ref>                   Default: v0.6.0.
+  --ref <git-ref>                   Default: v0.7.2.
   --python <version>                Default: 3.13.
   --no-start                        Install and enroll, but do not start systemd service.
   -h, --help                        Show this help.

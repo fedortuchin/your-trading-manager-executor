@@ -34,7 +34,7 @@ Heartbeat may report non-secret local credential metadata:
 
 ```json
 {
-  "clientVersion": "0.7.1",
+  "clientVersion": "0.7.2",
   "heartbeatStatus": "online",
   "capabilities": {
     "leases": true,
@@ -74,9 +74,9 @@ Authorization: Bearer <executor access token>
 YTM returns either `item: null` or one command for the executor's broker account.
 
 The executor repeats local checks after leasing. A provider-backed command is rejected locally when
-the local risk policy is missing, disabled, incomplete, kill-switched, paper-only for `real`, or the
-command violates local market, margin mode, instrument, order type, notional, projected position,
-per-symbol exposure, daily loss, leverage, position mode, or reduce-only limits.
+the local risk policy is missing, disabled, kill-switched, paper-only for `real`, or the command
+violates any configured local market, margin mode, instrument, order type, notional, projected
+position, per-symbol exposure, daily loss, leverage, position mode, or reduce-only limits.
 
 After risk preflight, the executor normalizes the command into a broker adapter order request. The
 request must include provider, symbol, side, position effect, order type, quantity or notional, and
