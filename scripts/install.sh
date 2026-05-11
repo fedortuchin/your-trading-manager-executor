@@ -2,7 +2,7 @@
 set -euo pipefail
 
 INSTALL_DIR="/opt/ytm-executor"
-IMAGE="ghcr.io/fedortuchin/your-trading-manager-executor:v0.6.0"
+IMAGE="ghcr.io/fedortuchin/your-trading-manager-executor:v0.7.0"
 SERVER_URL=""
 ENROLLMENT_TOKEN=""
 BROKER_PROVIDER=""
@@ -17,13 +17,13 @@ Usage:
 Options:
   --broker-provider <tbank|binance>  Prompt locally for broker credentials after enrollment.
   --validate-broker                 Validate broker credentials after the local prompt.
-  --image <image>                    Default: ghcr.io/fedortuchin/your-trading-manager-executor:v0.6.0.
+  --image <image>                    Default: ghcr.io/fedortuchin/your-trading-manager-executor:v0.7.0.
   --install-dir <path>               Default: /opt/ytm-executor.
   --no-start                         Install and enroll, but do not start the compose service.
   -h, --help                         Show this help.
 
 Example:
-  curl -fsSL https://raw.githubusercontent.com/fedortuchin/your-trading-manager-executor/v0.6.0/scripts/install.sh | sudo bash -s -- \
+  curl -fsSL https://raw.githubusercontent.com/fedortuchin/your-trading-manager-executor/v0.7.0/scripts/install.sh | sudo bash -s -- \
     --server https://trademate.pro \
     --enrollment-token ytm_enroll_xxx
 EOF
