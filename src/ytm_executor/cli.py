@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 from ytm_executor import __version__
 from ytm_executor.client import YtmClient
 from ytm_executor.preflight import CommandPreflightDecision, preflight_command
+from ytm_executor.reconciliation import OkxSwapReconciliationAdapter
 from ytm_executor.risk import (
     DEFAULT_RISK_POLICY_FILE,
     DEFAULT_RISK_STATE_FILE,
@@ -56,6 +57,10 @@ def main(argv: list[str] | None = None) -> int:
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("--once", action="store_true")
     run_parser.add_argument("--interval-seconds", default=5, type=int)
+    run_parser.add_argument("--enable-real-orders", action="store_true")
+    run_parser.add_argument("--reconcile-okx", action="store_true")
+    run_parser.add_argument("--reconciliation-broker-name", default="main")
+    run_parser.add_argument("--reconciliation-interval-seconds", default=60, type=int)
 
     broker_parser = subparsers.add_parser("broker")
     broker_subparsers = broker_parser.add_subparsers(dest="broker_command", required=True)
@@ -105,6 +110,9 @@ def main(argv: list[str] | None = None) -> int:
     reconciliation_upload.add_argument("--payload-file", required=True)
     reconciliation_upload.add_argument("--execution-mode")
     reconciliation_upload.add_argument("--provider-snapshot-id")
+    reconciliation_capture_okx = reconciliation_subparsers.add_parser("capture-okx")
+    reconciliation_capture_okx.add_argument("--name", default="main")
+    reconciliation_capture_okx.add_argument("--execution-mode")
 
     args = parser.parse_args(argv)
     try:
@@ -155,6 +163,7 @@ def _run(args: argparse.Namespace) -> int:
     store = _store(args)
     validation_store = _validation_store(args)
     client = YtmClient(server_url=state.server_url, allowed_hosts=state.allowed_hosts)
+    last_reconciliation_at = 0.0
     while True:
         risk_policy = read_risk_policy(Path(args.risk_policy_file))
         capabilities = {"leases": True, "zeroSecret": True}
@@ -183,8 +192,27 @@ def _run(args: argparse.Namespace) -> int:
                 risk_policy=risk_policy,
                 risk_state=read_risk_state(Path(args.risk_state_file)),
                 validation_summaries=validation_store.list_public(),
+                real_order_placement_enabled=args.enable_real_orders,
             )
             _record_preflight_decision(client, state.access_token, item, decision)
+        if args.reconcile_okx:
+            now_monotonic = time.monotonic()
+            if (
+                now_monotonic - last_reconciliation_at
+                >= max(1, int(args.reconciliation_interval_seconds))
+            ):
+                try:
+                    response = _capture_and_upload_okx_reconciliation(
+                        client=client,
+                        access_token=state.access_token,
+                        store=store,
+                        name=args.reconciliation_broker_name,
+                        execution_mode=None,
+                    )
+                    print(json.dumps(response, ensure_ascii=False, sort_keys=True))
+                except Exception as exc:
+                    print(f"OKX reconciliation failed: {exc}", file=sys.stderr)
+                last_reconciliation_at = now_monotonic
         if args.once:
             return 0
         time.sleep(max(1, int(args.interval_seconds)))
@@ -249,7 +277,44 @@ def _reconciliation(args: argparse.Namespace) -> int:
         )
         print(json.dumps(response, ensure_ascii=False, sort_keys=True))
         return 0
+    if args.reconciliation_command == "capture-okx":
+        state = read_state(Path(args.state_file))
+        store = _store(args)
+        client = YtmClient(server_url=state.server_url, allowed_hosts=state.allowed_hosts)
+        response = _capture_and_upload_okx_reconciliation(
+            client=client,
+            access_token=state.access_token,
+            store=store,
+            name=args.name,
+            execution_mode=args.execution_mode,
+        )
+        print(json.dumps(response, ensure_ascii=False, sort_keys=True))
+        return 0
     return 2
+
+
+def _capture_and_upload_okx_reconciliation(
+    *,
+    client: YtmClient,
+    access_token: str,
+    store: LocalSecretStore,
+    name: str,
+    execution_mode: str | None,
+) -> dict[str, object]:
+    secret = store.get(provider="okx", name=name)
+    adapter = OkxSwapReconciliationAdapter(
+        api_key=_required_text(secret.get("apiKey"), "apiKey"),
+        api_secret=_required_text(secret.get("apiSecret"), "apiSecret"),
+        passphrase=_required_text(secret.get("passphrase"), "passphrase"),
+    )
+    snapshot = adapter.capture_snapshot()
+    return client.record_reconciliation_snapshot(
+        access_token=access_token,
+        execution_mode=execution_mode,
+        payload=snapshot,
+        snapshot_type="full",
+        status="ok",
+    )
 
 
 def _broker_secret(args: argparse.Namespace) -> dict[str, str]:

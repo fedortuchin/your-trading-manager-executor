@@ -7,7 +7,10 @@ from typing import Any
 import ytm_executor.preflight as preflight_module
 from ytm_executor.adapters import BrokerAdapterResult
 from ytm_executor.binance_futures import BINANCE_USDM_FUTURES_MAINNET_ORDER_TEST_ADAPTER
-from ytm_executor.okx_swap import OKX_SWAP_MAINNET_ORDER_PRECHECK_ADAPTER
+from ytm_executor.okx_swap import (
+    OKX_SWAP_MAINNET_ORDER_ADAPTER,
+    OKX_SWAP_MAINNET_ORDER_PRECHECK_ADAPTER,
+)
 from ytm_executor.preflight import preflight_command
 from ytm_executor.risk import RiskPolicy, RiskState
 from ytm_executor.secret_store import CredentialSummary
@@ -387,6 +390,118 @@ def test_preflight_okx_swap_precheck_then_rejects_real_placement(monkeypatch) ->
     assert decision.result_payload["preflightReasonCode"] == "real_execution_disabled"
     assert decision.result_payload["adapterPreflight"] == "passed"
     assert decision.result_payload["adapterResult"]["executorAction"] == "order_precheck_validated"
+    assert seen["api_secret"] == "okx-private-secret"
+    assert "okx-private-secret" not in repr(decision.result_payload)
+    assert "okx-passphrase" not in repr(decision.result_payload)
+
+
+def test_preflight_okx_real_order_adapter_requires_explicit_local_enablement(
+    monkeypatch,
+) -> None:
+    command = _leased_command(provider="okx", execution_mode="real")
+    command["command"]["symbol"] = "BTCUSDT"
+    command["command"]["commandPayload"]["adapter"] = OKX_SWAP_MAINNET_ORDER_ADAPTER
+    command["command"]["commandPayload"]["market"] = "okx_swap"
+    command["command"]["commandPayload"]["quantity"] = "1"
+
+    class UnexpectedOkxPlacementAdapter:
+        def __init__(self, **kwargs):
+            raise AssertionError("real placement adapter must not be built while disabled")
+
+    monkeypatch.setattr(
+        preflight_module,
+        "OkxSwapMainnetOrderPlacementAdapter",
+        UnexpectedOkxPlacementAdapter,
+    )
+
+    decision = preflight_command(
+        command,
+        local_credentials=(CredentialSummary(provider="okx", name="main"),),
+        local_secret_resolver=lambda provider, name: {
+            "apiKey": f"{provider}-{name}-public",
+            "apiSecret": "okx-private-secret",
+            "passphrase": "okx-passphrase",
+        },
+        risk_policy=_risk_policy(paper_only=False, market="okx_swap", symbol="BTCUSDT"),
+        risk_state=_risk_state(),
+        validation_summaries=(
+            _validation(
+                provider="okx",
+                checked_at="2026-05-10T10:00:00Z",
+                trading_allowed=False,
+            ),
+        ),
+        now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
+    )
+
+    assert decision.status == "rejected"
+    assert decision.result_payload["preflightReasonCode"] == "real_execution_disabled"
+    assert decision.result_payload["adapterPreflight"] == "blocked"
+
+
+def test_preflight_okx_real_order_adapter_acknowledges_when_locally_enabled(
+    monkeypatch,
+) -> None:
+    command = _leased_command(provider="okx", execution_mode="real")
+    command["command"]["symbol"] = "BTCUSDT"
+    command["command"]["commandPayload"]["adapter"] = OKX_SWAP_MAINNET_ORDER_ADAPTER
+    command["command"]["commandPayload"]["market"] = "okx_swap"
+    command["command"]["commandPayload"]["quantity"] = "1"
+    seen: dict[str, Any] = {}
+
+    class FakeOkxPlacementAdapter:
+        def __init__(self, *, api_key: str, api_secret: str, passphrase: str) -> None:
+            seen["api_key"] = api_key
+            seen["api_secret"] = api_secret
+            seen["passphrase"] = passphrase
+
+        def prepare_order(self, request):
+            seen["request"] = request
+            return BrokerAdapterResult(
+                status="acknowledged",
+                payload={
+                    "adapter": OKX_SWAP_MAINNET_ORDER_ADAPTER,
+                    "clientOrderId": "ytm_okx_1",
+                    "executorAction": "order_submitted",
+                    "mainnet": True,
+                    "market": "okx_swap",
+                    "provider": "okx",
+                    "providerOrderId": "okx-order-1",
+                    "providerStatus": "accepted",
+                },
+            )
+
+    monkeypatch.setattr(
+        preflight_module,
+        "OkxSwapMainnetOrderPlacementAdapter",
+        FakeOkxPlacementAdapter,
+    )
+
+    decision = preflight_command(
+        command,
+        local_credentials=(CredentialSummary(provider="okx", name="main"),),
+        local_secret_resolver=lambda provider, name: {
+            "apiKey": f"{provider}-{name}-public",
+            "apiSecret": "okx-private-secret",
+            "passphrase": "okx-passphrase",
+        },
+        risk_policy=_risk_policy(paper_only=False, market="okx_swap", symbol="BTCUSDT"),
+        risk_state=_risk_state(),
+        validation_summaries=(
+            _validation(
+                provider="okx",
+                checked_at="2026-05-10T10:00:00Z",
+                trading_allowed=False,
+            ),
+        ),
+        real_order_placement_enabled=True,
+        now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
+    )
+
+    assert decision.status == "acknowledged"
+    assert decision.result_payload["executorAction"] == "order_submitted"
+    assert decision.result_payload["providerOrderId"] == "okx-order-1"
+    assert decision.result_payload["adapterPreflight"] == "passed"
     assert seen["api_secret"] == "okx-private-secret"
     assert "okx-private-secret" not in repr(decision.result_payload)
     assert "okx-passphrase" not in repr(decision.result_payload)

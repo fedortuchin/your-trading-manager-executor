@@ -7,7 +7,9 @@ import pytest
 from ytm_executor.adapters import BrokerOrderRequest
 from ytm_executor.okx_swap import (
     OKX_ORDER_PRECHECK_PATH,
+    OKX_SWAP_MAINNET_ORDER_ADAPTER,
     OKX_SWAP_MAINNET_ORDER_PRECHECK_ADAPTER,
+    OkxSwapMainnetOrderPlacementAdapter,
     OkxSwapMainnetOrderPrecheckAdapter,
     okx_swap_instrument_rules,
     okx_swap_order_precheck_params,
@@ -117,10 +119,67 @@ def test_okx_swap_adapter_calls_order_precheck_not_place_order() -> None:
     assert "passphrase" not in repr(result.payload)
 
 
+def test_okx_swap_placement_adapter_prechecks_then_places_order() -> None:
+    api = FakeOkxSwapApi()
+    adapter = OkxSwapMainnetOrderPlacementAdapter(
+        api_key="public",
+        api_secret="private",
+        passphrase="passphrase",
+        api=api,
+    )
+
+    result = adapter.prepare_order(_request())
+
+    assert len(api.precheck_calls) == 1
+    assert len(api.place_order_calls) == 1
+    assert api.place_order_calls[0]["params"] == api.precheck_calls[0]["params"]
+    assert result.payload == {
+        "adapter": OKX_SWAP_MAINNET_ORDER_ADAPTER,
+        "clientOrderId": api.place_order_calls[0]["params"]["clOrdId"],
+        "executorAction": "order_submitted",
+        "mainnet": True,
+        "market": "okx_swap",
+        "normalizedOrder": {
+            "instId": "BTC-USDT-SWAP",
+            "ordType": "limit",
+            "posSide": "net",
+            "px": "100",
+            "side": "buy",
+            "sz": "1.2",
+            "tdMode": "cross",
+        },
+        "precheck": "passed",
+        "provider": "okx",
+        "providerOrderId": "okx-order-1",
+        "providerResultCode": "0",
+        "providerStatus": "accepted",
+    }
+    assert "private" not in repr(result.payload)
+    assert "passphrase" not in repr(result.payload)
+
+
+def test_okx_swap_placement_rejects_broker_error_without_acknowledgement() -> None:
+    api = FakeOkxSwapApi(place_order_response={"code": "0", "data": [{"sCode": "51000"}]})
+    adapter = OkxSwapMainnetOrderPlacementAdapter(
+        api_key="public",
+        api_secret="private",
+        passphrase="passphrase",
+        api=api,
+    )
+
+    with pytest.raises(ValueError, match="51000"):
+        adapter.prepare_order(_request())
+
+
 class FakeOkxSwapApi:
-    def __init__(self) -> None:
+    def __init__(self, *, place_order_response: dict[str, object] | None = None) -> None:
         self.precheck_calls: list[dict[str, object]] = []
         self.place_order_calls: list[dict[str, object]] = []
+        self.place_order_response = place_order_response or {
+            "code": "0",
+            "data": [{"clOrdId": "ytm-order-1", "ordId": "okx-order-1", "sCode": "0"}],
+            "msg": "",
+        }
 
     def get_instruments(self, *, inst_type: str, inst_id: str) -> dict[str, object]:
         assert inst_type == "SWAP"
@@ -131,9 +190,9 @@ class FakeOkxSwapApi:
         self.precheck_calls.append({"endpoint": OKX_ORDER_PRECHECK_PATH, "params": params})
         return {"code": "0", "data": [], "msg": ""}
 
-    def place_order(self, **kwargs) -> None:
-        self.place_order_calls.append(kwargs)
-        raise AssertionError("place_order must not be called")
+    def place_order(self, params: dict[str, str]) -> dict[str, object]:
+        self.place_order_calls.append({"params": params})
+        return self.place_order_response
 
 
 def _request(

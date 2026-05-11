@@ -11,12 +11,14 @@ from ytm_executor.adapters import BrokerAdapterResult, BrokerOrderRequest
 from ytm_executor.guards import reject_secret_fields
 
 OKX_SWAP_MAINNET_ORDER_PRECHECK_ADAPTER = "okx_swap_mainnet_order_precheck"
+OKX_SWAP_MAINNET_ORDER_ADAPTER = "okx_swap_mainnet_order"
 OKX_ORDER_PRECHECK_PATH = "/api/v5/trade/order-precheck"
 
 
 class OkxSwapApi(Protocol):
     def get_instruments(self, *, inst_type: str, inst_id: str) -> dict[str, Any]: ...
     def order_precheck(self, params: dict[str, str]) -> dict[str, Any]: ...
+    def place_order(self, params: dict[str, str]) -> dict[str, Any]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,8 +46,8 @@ class OkxSwapMainnetOrderPrecheckAdapter:
     def prepare_order(self, request: BrokerOrderRequest) -> BrokerAdapterResult:
         if request.provider != "okx":
             raise ValueError("OKX adapter received a non-OKX request")
-        if request.execution_mode != "real":
-            raise ValueError("OKX SWAP order precheck requires executionMode=real")
+        if request.execution_mode not in {"external_paper", "real"}:
+            raise ValueError("OKX SWAP order precheck requires provider-backed execution")
         api = self.api or _build_mainnet_api(
             api_key=self.api_key,
             api_secret=self.api_secret,
@@ -75,6 +77,66 @@ class OkxSwapMainnetOrderPrecheckAdapter:
 
 
 @dataclass(frozen=True, slots=True)
+class OkxSwapMainnetOrderPlacementAdapter:
+    """Place OKX SWAP mainnet orders after local gates and OKX precheck pass."""
+
+    api_key: str
+    api_secret: str
+    passphrase: str
+    api: OkxSwapApi | None = None
+
+    provider = "okx"
+
+    def prepare_order(self, request: BrokerOrderRequest) -> BrokerAdapterResult:
+        if request.provider != "okx":
+            raise ValueError("OKX adapter received a non-OKX request")
+        if request.execution_mode != "real":
+            raise ValueError("OKX SWAP order placement requires executionMode=real")
+        api = self.api or _build_mainnet_api(
+            api_key=self.api_key,
+            api_secret=self.api_secret,
+            passphrase=self.passphrase,
+        )
+        inst_id = okx_swap_instrument_id(request.symbol)
+        rules = okx_swap_instrument_rules(
+            _okx_response_data(
+                api.get_instruments(inst_type="SWAP", inst_id=inst_id),
+                "get_instruments",
+            ),
+            inst_id,
+        )
+        params = okx_swap_order_params(request, rules=rules)
+        _okx_response_data(api.order_precheck(params), "order_precheck")
+        response = _single_order_response(
+            _okx_response_data(api.place_order(params), "place_order"),
+            "place_order",
+        )
+        provider_order_id = _optional_text(response.get("ordId"))
+        if provider_order_id is None:
+            raise ValueError("OKX place_order response missing ordId")
+        payload = {
+            "adapter": OKX_SWAP_MAINNET_ORDER_ADAPTER,
+            "clientOrderId": params["clOrdId"],
+            "executorAction": "order_submitted",
+            "mainnet": True,
+            "market": "okx_swap",
+            "normalizedOrder": _public_normalized_order(params),
+            "precheck": "passed",
+            "provider": "okx",
+            "providerOrderId": provider_order_id,
+            "providerStatus": "accepted",
+        }
+        result_code = _optional_text(response.get("sCode"))
+        result_message = _optional_text(response.get("sMsg"))
+        if result_code is not None:
+            payload["providerResultCode"] = result_code
+        if result_message is not None:
+            payload["providerMessage"] = result_message
+        reject_secret_fields(payload)
+        return BrokerAdapterResult(status="acknowledged", payload=payload)
+
+
+@dataclass(frozen=True, slots=True)
 class OkxSdkSwapApi:
     account_api: Any
     trade_api: Any
@@ -85,8 +147,19 @@ class OkxSdkSwapApi:
     def order_precheck(self, params: dict[str, str]) -> dict[str, Any]:
         return self.trade_api._request_with_params("POST", OKX_ORDER_PRECHECK_PATH, params)
 
+    def place_order(self, params: dict[str, str]) -> dict[str, Any]:
+        return self.trade_api.place_order(**params)
+
 
 def okx_swap_order_precheck_params(
+    request: BrokerOrderRequest,
+    *,
+    rules: OkxSwapInstrumentRules,
+) -> dict[str, str]:
+    return okx_swap_order_params(request, rules=rules)
+
+
+def okx_swap_order_params(
     request: BrokerOrderRequest,
     *,
     rules: OkxSwapInstrumentRules,
@@ -96,7 +169,7 @@ def okx_swap_order_precheck_params(
     size = _normalized_size(request, rules=rules)
     params = {
         "clOrdId": _okx_client_order_id(request.client_order_id),
-        "instId": request.symbol,
+        "instId": rules.inst_id,
         "ordType": order_type,
         "posSide": "net",
         "side": side,
@@ -171,6 +244,17 @@ def _okx_response_data(response: dict[str, Any], endpoint: str) -> list[dict[str
         raise ValueError(f"OKX {endpoint} response data is invalid")
     reject_secret_fields(data)
     return [dict(item) for item in data]
+
+
+def _single_order_response(items: list[dict[str, Any]], endpoint: str) -> dict[str, Any]:
+    if not items:
+        raise ValueError(f"OKX {endpoint} response data is empty")
+    response = dict(items[0])
+    status_code = _optional_text(response.get("sCode"))
+    if status_code not in {None, "0"}:
+        raise ValueError(f"OKX {endpoint} rejected request with code {status_code}")
+    reject_secret_fields(response)
+    return response
 
 
 def _normalized_size(
@@ -285,6 +369,13 @@ def _required_text(value: object, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"OKX {field_name} is required")
     return value.strip()
+
+
+def _optional_text(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
 
 
 def _required_positive_decimal(value: object, field_name: str) -> Decimal:

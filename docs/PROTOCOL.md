@@ -92,16 +92,23 @@ quantity, price, and notional, and call `test_order`. This is a validation-only 
 does not place an order; after the validate-only call, the executor still rejects placement with
 `real_execution_disabled` until real order adapters are explicitly enabled.
 
-For OKX `real`, a command may explicitly request
+For OKX `external_paper` or `real`, a command may explicitly request
 `commandPayload.adapter=okx_swap_mainnet_order_precheck`. The executor then uses the local OKX
 credential and `python-okx` to read SWAP instrument rules, normalize contract size and price, and
 call `POST /api/v5/trade/order-precheck`. Plain USDT symbols such as `BTCUSDT` are mapped to OKX
 SWAP ids such as `BTC-USDT-SWAP`; if `quantity` is absent, contract size is derived from
 `orderNotional` and `priceReference`. This is a validation-only broker call and does not place an
-order; after the validate-only call, the executor still rejects placement with
-`real_execution_disabled` until real order adapters are explicitly enabled. OKX documents
+order. `external_paper` returns `acknowledged` with `order_placement_skipped`; `real` still
+rejects with `real_execution_disabled` after this validate-only adapter. OKX documents
 `order-precheck` as Trade-permission and applicable to multi-currency margin mode and portfolio
 margin mode.
+
+For OKX `real`, a command may explicitly request
+`commandPayload.adapter=okx_swap_mainnet_order`. This adapter is disabled unless the executor was
+started with `--enable-real-orders`. When enabled, the executor still repeats local risk checks,
+normalizes the order, calls OKX `order-precheck`, and only then calls `POST /api/v5/trade/order`.
+The sanitized result uses `executorAction=order_submitted` and includes `providerOrderId`; broker
+secrets and raw authorization data are never uploaded to YTM.
 
 ## Result
 
@@ -129,4 +136,9 @@ Request contains:
 - `payload`: sanitized provider state.
 
 Broker secrets, API keys, Authorization headers, and token-like fields are rejected before upload.
-The foundation records snapshots and drift status; full provider fill ingestion remains later work.
+The executor can upload a caller-provided JSON snapshot or capture an OKX SWAP read-only snapshot
+itself with `ytm-executor reconciliation capture-okx`. OKX capture calls `account/balance`,
+`account/positions`, and `trade/orders-pending`, normalizes balances, positions, and open orders,
+and uploads that sanitized state to YTM. `ytm-executor run --reconcile-okx` performs the same
+capture periodically. The foundation records snapshots and drift status; full provider fill
+ingestion remains later work.

@@ -29,8 +29,11 @@ Implemented:
   `binance-sdk-derivatives-trading-usds-futures` package;
 - Binance Futures pre-trade normalization against `exchangeInfo` filters before `test_order`;
 - OKX SWAP mainnet `order-precheck` adapter through `python-okx==0.4.1`;
+- OKX SWAP mainnet real order adapter through `python-okx==0.4.1`, disabled unless the executor is
+  started with explicit real-order enablement;
 - command lease polling;
 - sanitized provider reconciliation snapshot upload to YTM;
+- OKX SWAP read-only reconciliation capture for balances, positions, and open orders;
 - client-side rejection of secret-like fields in YTM API payloads;
 - Docker-first VPS installer;
 - GHCR Docker image build, cosign signing, SBOM generation, and release checksums in CI;
@@ -38,8 +41,7 @@ Implemented:
 
 Not implemented yet:
 
-- OKX/Binance/T-Bank real order placement adapters;
-- real order placement;
+- Binance/T-Bank real order placement adapters;
 - provider fill upload and full reconciliation application.
 
 Binance adapter work uses the official Binance Python connector repository behind the executor
@@ -54,10 +56,13 @@ OKX adapter work uses `python-okx==0.4.1`. The first OKX adapter targets SWAP ma
 normalizes symbol, contract size, and price against `account/instruments`, then calls
 `POST /api/v5/trade/order-precheck` only. Plain USDT pairs such as `BTCUSDT` are mapped to native
 OKX SWAP ids such as `BTC-USDT-SWAP`; when `quantity` is absent, contract size is derived locally
-from `orderNotional` and `priceReference`. OKX validates the request without placing an order, and
-the executor still rejects real order placement after that validate-only call. OKX documents this
-precheck endpoint as Trade-permission and only applicable to multi-currency margin mode and
-portfolio margin mode; simple-mode accounts may fail closed at broker precheck.
+from `orderNotional` and `priceReference`. OKX validates the request without placing an order.
+For `external_paper`, the executor reports a sanitized acknowledgement with
+`order_placement_skipped`. For `real`, the separate `okx_swap_mainnet_order` adapter first calls
+the same `order-precheck`, then calls `POST /api/v5/trade/order` only when all local gates pass and
+the executor was started with `--enable-real-orders`. OKX documents this precheck endpoint as
+Trade-permission and only applicable to multi-currency margin mode and portfolio margin mode;
+simple-mode accounts may fail closed at broker precheck.
 
 ## Install On A VPS
 
@@ -221,9 +226,10 @@ sudo docker compose run --rm ytm-executor risk init --kill-switch-off \
   --position-mode one_way
 ```
 
-Use `ytm-executor risk show` to inspect the local policy. `--allow-real` can be written into the
-local policy for a future real-order build, but this foundation build still rejects all `real`
-commands after local risk preflight.
+Use `ytm-executor risk show` to inspect the local policy. `--allow-real` only removes the local
+paper-only risk block. OKX real order placement still requires the exact real adapter in the leased
+command and `ytm-executor run --enable-real-orders`; without that runtime flag, `real` remains
+fail-closed.
 
 Run once:
 
@@ -235,6 +241,12 @@ Run continuously:
 
 ```bash
 ytm-executor run
+```
+
+Run continuously with OKX read-only reconciliation polling:
+
+```bash
+ytm-executor run --reconcile-okx --reconciliation-interval-seconds 60
 ```
 
 Upload a sanitized provider reconciliation snapshot from the executor host:
@@ -251,6 +263,16 @@ The payload file must be a JSON object without secret-like fields. Current snaps
 provider state and lets YTM mark drift/reconciliation-required state; provider fill ingestion and
 full automatic state application remain later work.
 
+Capture and upload an OKX SWAP read-only snapshot directly from the executor host:
+
+```bash
+ytm-executor reconciliation capture-okx --execution-mode external_paper
+```
+
+This calls OKX `account/balance`, `account/positions`, and `trade/orders-pending`, then uploads
+only normalized balances, positions, and open orders. Broker credentials stay in the local secret
+store and are not included in the YTM payload.
+
 When a command is leased, the executor runs local preflight before acknowledging anything:
 
 - command payload must not contain secret-like fields;
@@ -261,7 +283,8 @@ When a command is leased, the executor runs local preflight before acknowledging
   the local policy;
 - order request normalization must produce a valid adapter request and deterministic
   `clientOrderId`;
-- `external_paper` is acknowledged as dry-run with `order_placement_skipped`;
+- `external_paper` is acknowledged with `order_placement_skipped`; OKX `external_paper` may first
+  run `order-precheck` when the command explicitly requests `okx_swap_mainnet_order_precheck`;
 - `real` is locally rejected in this foundation build.
 
 Rejected preflight results are sanitized and reported as `rejected` with
@@ -277,6 +300,7 @@ YTM Cloud may receive:
 - sanitized execution results.
 - sanitized broker credential validation status.
 - sanitized provider reconciliation snapshots.
+- OKX read-only reconciliation state: balances, positions, and open orders.
 
 YTM Cloud must not receive:
 
@@ -300,10 +324,15 @@ which fetches Binance USD-M Futures mainnet `exchangeInfo`, normalizes the order
 filters, calls `test_order` only, and reports `order_test_validated` when Binance accepts the
 validate-only request. The executor still rejects the command with `real_execution_disabled` after
 this preflight because real placement is not enabled yet.
-OKX `real` commands can request the `okx_swap_mainnet_order_precheck` adapter in
-`commandPayload.adapter`, which fetches OKX SWAP instrument rules, normalizes size and price, calls
-`order-precheck` only, and reports `order_precheck_validated` when OKX accepts the validate-only
-request. The executor still rejects the command with `real_execution_disabled` after this preflight.
+OKX `external_paper` and `real` commands can request the `okx_swap_mainnet_order_precheck` adapter
+in `commandPayload.adapter`, which fetches OKX SWAP instrument rules, normalizes size and price,
+calls `order-precheck` only, and reports `order_precheck_validated` when OKX accepts the
+validate-only request. `external_paper` is acknowledged without placement; `real` is still rejected
+with `real_execution_disabled` after this preflight.
+OKX `real` commands can request the `okx_swap_mainnet_order` adapter. That adapter is disabled by
+default; when the executor is started with `--enable-real-orders` and local risk policy permits
+real trading, it fetches instrument rules, runs `order-precheck`, then calls `trade/order` and
+reports `order_submitted` with a sanitized `providerOrderId`.
 The secret-field guard prevents common accidental leaks by rejecting secret-like field names; it is
 not a substitute for source review, tests, signed releases, and network allowlisting.
 

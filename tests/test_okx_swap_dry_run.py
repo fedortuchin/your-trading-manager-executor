@@ -57,6 +57,55 @@ def test_real_okx_swap_dry_run_reaches_order_precheck_without_placement(monkeypa
     assert "okx-passphrase" not in repr(decision.result_payload)
 
 
+def test_external_paper_okx_swap_precheck_acknowledges_without_placement(monkeypatch) -> None:
+    api = FakeOkxSwapApi()
+    monkeypatch.setattr(
+        okx_swap,
+        "_build_mainnet_api",
+        lambda *, api_key, api_secret, passphrase: api,
+    )
+
+    command = _leased_real_okx_command()
+    command["command"]["executionMode"] = "external_paper"
+    decision = preflight_command(
+        command,
+        local_credentials=(CredentialSummary(provider="okx", name="main"),),
+        local_secret_resolver=lambda provider, name: {
+            "apiKey": f"{provider}-{name}-public",
+            "apiSecret": "okx-private-secret",
+            "passphrase": "okx-passphrase",
+        },
+        risk_policy=_risk_policy(paper_only=True),
+        risk_state=RiskState(realized_loss_by_date={}),
+        validation_summaries=(
+            {
+                "checkedAt": "2026-05-10T10:00:00Z",
+                "name": "main",
+                "permissions": {
+                    "accountReadable": True,
+                    "tradingAllowed": False,
+                    "withdrawalsAllowed": False,
+                },
+                "provider": "okx",
+                "status": "passed",
+                "warnings": ["trade_permission_not_verified_by_read_only_validation"],
+            },
+        ),
+        now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
+    )
+
+    assert api.instrument_calls == 1
+    assert len(api.precheck_calls) == 1
+    assert decision.status == "acknowledged"
+    assert decision.result_payload["executorAction"] == "order_placement_skipped"
+    assert decision.result_payload["executionMode"] == "external_paper"
+    assert decision.result_payload["adapterPreflight"] == "passed"
+    assert decision.result_payload["adapterResult"]["executorAction"] == "order_precheck_validated"
+    assert decision.result_payload["adapterResult"]["normalizedOrder"]["instId"] == "BTC-USDT-SWAP"
+    assert "okx-private-secret" not in repr(decision.result_payload)
+    assert "okx-passphrase" not in repr(decision.result_payload)
+
+
 class FakeOkxSwapApi:
     def __init__(self) -> None:
         self.instrument_calls = 0
@@ -118,12 +167,12 @@ def _leased_real_okx_command() -> dict[str, object]:
     }
 
 
-def _risk_policy() -> RiskPolicy:
+def _risk_policy(*, paper_only: bool = False) -> RiskPolicy:
     return RiskPolicy(
         configured=True,
         enabled=True,
         kill_switch=False,
-        paper_only=False,
+        paper_only=paper_only,
         allowed_markets=("okx_swap",),
         allowed_margin_modes=("cross",),
         allowed_symbols=("BTCUSDT",),

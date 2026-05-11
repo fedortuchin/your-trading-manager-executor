@@ -14,7 +14,9 @@ from ytm_executor.binance_futures import (
 )
 from ytm_executor.guards import SecretFieldError, reject_secret_fields
 from ytm_executor.okx_swap import (
+    OKX_SWAP_MAINNET_ORDER_ADAPTER,
     OKX_SWAP_MAINNET_ORDER_PRECHECK_ADAPTER,
+    OkxSwapMainnetOrderPlacementAdapter,
     OkxSwapMainnetOrderPrecheckAdapter,
 )
 from ytm_executor.risk import (
@@ -32,6 +34,7 @@ VALIDATE_ONLY_REAL_ADAPTERS = frozenset(
         OKX_SWAP_MAINNET_ORDER_PRECHECK_ADAPTER,
     }
 )
+REAL_ORDER_ADAPTERS = frozenset({OKX_SWAP_MAINNET_ORDER_ADAPTER})
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +51,7 @@ def preflight_command(
     risk_policy: RiskPolicy | None = None,
     risk_state: RiskState | None = None,
     validation_summaries: Iterable[dict[str, Any]],
+    real_order_placement_enabled: bool = False,
     now: datetime | None = None,
 ) -> CommandPreflightDecision:
     timestamp = (now or datetime.now(UTC)).astimezone(UTC)
@@ -101,10 +105,23 @@ def preflight_command(
             str(exc),
             extra={"adapterPreflight": "failed", "riskPreflight": "passed"},
         )
-    if execution_mode == "real" and _adapter_name(command) not in VALIDATE_ONLY_REAL_ADAPTERS:
+    adapter_name = _adapter_name(command)
+    if execution_mode == "real" and adapter_name not in (
+        VALIDATE_ONLY_REAL_ADAPTERS | REAL_ORDER_ADAPTERS
+    ):
         return _reject(
             "real_execution_disabled",
             "real execution is disabled in this executor build",
+            extra={"adapterPreflight": "blocked", "riskPreflight": "passed"},
+        )
+    if (
+        execution_mode == "real"
+        and adapter_name in REAL_ORDER_ADAPTERS
+        and not real_order_placement_enabled
+    ):
+        return _reject(
+            "real_execution_disabled",
+            "real order placement requires explicit local executor enablement",
             extra={"adapterPreflight": "blocked", "riskPreflight": "passed"},
         )
     try:
@@ -121,7 +138,7 @@ def preflight_command(
             str(exc),
             extra={"adapterPreflight": "failed", "riskPreflight": "passed"},
         )
-    if execution_mode == "real":
+    if execution_mode == "real" and adapter_name in VALIDATE_ONLY_REAL_ADAPTERS:
         return _reject(
             "real_execution_disabled",
             "real order placement is disabled in this executor build after validate-only preflight",
@@ -131,11 +148,38 @@ def preflight_command(
                 "riskPreflight": "passed",
             },
         )
+    if execution_mode == "real":
+        return _acknowledge_real_order_placement(
+            adapter_payload=adapter_result.payload,
+            provider=provider,
+        )
     return _acknowledge_without_order_placement(
         adapter_payload=adapter_result.payload,
         provider=provider,
         execution_mode=execution_mode,
     )
+
+
+def _acknowledge_real_order_placement(
+    *,
+    adapter_payload: dict[str, Any],
+    provider: str,
+) -> CommandPreflightDecision:
+    result_payload = {
+        "adapterPreflight": "passed",
+        "adapterResult": adapter_payload,
+        "executionMode": "real",
+        "executorAction": str(adapter_payload.get("executorAction", "order_submitted")),
+        "preflight": "passed",
+        "provider": provider,
+        "riskPreflight": "passed",
+        "zeroSecret": True,
+    }
+    for key in ("clientOrderId", "providerOrderId", "providerStatus"):
+        value = adapter_payload.get(key)
+        if isinstance(value, str) and value:
+            result_payload[key] = value
+    return _decision(status="acknowledged", result_payload=result_payload)
 
 
 def _validation_block(
@@ -241,9 +285,10 @@ def _adapter_for_command(
     local_secret_resolver: Callable[[str, str], dict[str, str]] | None,
 ):
     adapter_name = _adapter_name(command)
-    if adapter_name == OKX_SWAP_MAINNET_ORDER_PRECHECK_ADAPTER:
+    if adapter_name in {OKX_SWAP_MAINNET_ORDER_PRECHECK_ADAPTER, OKX_SWAP_MAINNET_ORDER_ADAPTER}:
         return _okx_adapter_for_command(
             command,
+            adapter_name=adapter_name,
             execution_mode=execution_mode,
             provider=provider,
             local_secret_resolver=local_secret_resolver,
@@ -270,14 +315,15 @@ def _adapter_for_command(
 def _okx_adapter_for_command(
     command: dict[str, Any],
     *,
+    adapter_name: str,
     execution_mode: str,
     provider: str,
     local_secret_resolver: Callable[[str, str], dict[str, str]] | None,
 ):
     if provider != "okx":
         raise ValueError("OKX SWAP mainnet adapter requires provider=okx")
-    if execution_mode != "real":
-        raise ValueError("OKX SWAP order precheck requires executionMode=real")
+    if execution_mode not in {"external_paper", "real"}:
+        raise ValueError("OKX SWAP order precheck requires provider-backed execution")
     if local_secret_resolver is None:
         raise ValueError("local OKX credential is required for SWAP mainnet adapter")
     credential_name = _text(command.get("credentialName")) or "main"
@@ -287,6 +333,14 @@ def _okx_adapter_for_command(
     passphrase = _text(secret.get("passphrase"))
     if not api_key or not api_secret or not passphrase:
         raise ValueError("local OKX API key, secret, and passphrase are required")
+    if adapter_name == OKX_SWAP_MAINNET_ORDER_ADAPTER:
+        if execution_mode != "real":
+            raise ValueError("OKX SWAP order placement requires executionMode=real")
+        return OkxSwapMainnetOrderPlacementAdapter(
+            api_key=api_key,
+            api_secret=api_secret,
+            passphrase=passphrase,
+        )
     return OkxSwapMainnetOrderPrecheckAdapter(
         api_key=api_key,
         api_secret=api_secret,

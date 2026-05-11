@@ -16,8 +16,9 @@ The executor rejects leased provider-backed commands when:
   position, per-symbol position, daily loss, leverage, position mode, or reduce-only rules;
 - `executionMode=real` while `paperOnly=true`.
 
-The current foundation build still rejects all `real` commands after validate-only broker preflight
-because real broker order adapters are not enabled yet.
+`paperOnly=false` is necessary but not sufficient for real orders. OKX real order placement also
+requires the exact `okx_swap_mainnet_order` adapter in the leased command and
+`ytm-executor run --enable-real-orders`; without that runtime flag, `real` remains fail-closed.
 
 ## Required Local Limits
 

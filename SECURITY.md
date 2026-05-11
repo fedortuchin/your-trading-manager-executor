@@ -58,6 +58,11 @@ Known limits:
   calls `test_order`, not `new_order`; it is validation-only.
 - the OKX SWAP mainnet adapter reads `account/instruments`, normalizes symbol, contract size, and
   price locally, and calls `trade/order-precheck`, not `trade/order`; it is validation-only.
+- the OKX SWAP real adapter is disabled by default and requires `--enable-real-orders`, local
+  `paperOnly=false`, the exact real adapter name from an approved command, and successful
+  `order-precheck` before it calls `trade/order`.
+- OKX reconciliation capture uses read-only account balance, positions, and pending-order
+  endpoints, then uploads only normalized provider state to YTM.
 - local preflight currently rejects all `real` commands even if YTM leases one by mistake.
 - missing, disabled, incomplete, or kill-switched local risk policy rejects provider-backed
   commands before any adapter can run.
