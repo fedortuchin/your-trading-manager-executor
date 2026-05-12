@@ -342,6 +342,7 @@ def test_preflight_okx_swap_precheck_then_rejects_real_placement(monkeypatch) ->
     command["command"]["commandPayload"]["adapter"] = OKX_SWAP_MAINNET_ORDER_PRECHECK_ADAPTER
     command["command"]["commandPayload"]["market"] = "okx_swap"
     command["command"]["commandPayload"]["quantity"] = "1"
+    command["command"]["stopLoss"] = "95"
     seen: dict[str, Any] = {}
 
     class FakeOkxSwapAdapter:
@@ -403,6 +404,7 @@ def test_preflight_okx_real_order_adapter_requires_explicit_local_enablement(
     command["command"]["commandPayload"]["adapter"] = OKX_SWAP_MAINNET_ORDER_ADAPTER
     command["command"]["commandPayload"]["market"] = "okx_swap"
     command["command"]["commandPayload"]["quantity"] = "1"
+    command["command"]["stopLoss"] = "95"
 
     class UnexpectedOkxPlacementAdapter:
         def __init__(self, **kwargs):
@@ -447,6 +449,7 @@ def test_preflight_okx_real_order_adapter_acknowledges_when_locally_enabled(
     command["command"]["commandPayload"]["adapter"] = OKX_SWAP_MAINNET_ORDER_ADAPTER
     command["command"]["commandPayload"]["market"] = "okx_swap"
     command["command"]["commandPayload"]["quantity"] = "1"
+    command["command"]["stopLoss"] = "95"
     seen: dict[str, Any] = {}
 
     class FakeOkxPlacementAdapter:

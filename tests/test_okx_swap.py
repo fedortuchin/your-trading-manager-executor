@@ -22,6 +22,14 @@ def test_okx_swap_order_precheck_params_for_limit_long_open() -> None:
     params = okx_swap_order_precheck_params(_request(), rules=rules)
 
     assert params == {
+        "attachAlgoOrds": [
+            {
+                "attachAlgoClOrdId": params["attachAlgoOrds"][0]["attachAlgoClOrdId"],
+                "slOrdPx": "-1",
+                "slTriggerPx": "95",
+                "slTriggerPxType": "last",
+            }
+        ],
         "clOrdId": params["clOrdId"],
         "instId": "BTC-USDT-SWAP",
         "ordType": "limit",
@@ -33,19 +41,27 @@ def test_okx_swap_order_precheck_params_for_limit_long_open() -> None:
     }
     assert params["clOrdId"].startswith("ytm")
     assert len(params["clOrdId"]) == 32
+    assert params["attachAlgoOrds"][0]["attachAlgoClOrdId"].startswith("ytmsl")
+    assert len(params["attachAlgoOrds"][0]["attachAlgoClOrdId"]) == 32
 
 
 def test_okx_swap_maps_short_open_and_rounds_sell_price_up() -> None:
     rules = okx_swap_instrument_rules(_instruments(), "BTC-USDT-SWAP")
 
     params = okx_swap_order_precheck_params(
-        _request(side="short", quantity=Decimal("1.29"), limit_price=Decimal("100.01")),
+        _request(
+            side="short",
+            quantity=Decimal("1.29"),
+            limit_price=Decimal("100.01"),
+            stop_loss=Decimal("105"),
+        ),
         rules=rules,
     )
 
     assert params["side"] == "sell"
     assert params["px"] == "100.1"
     assert params["sz"] == "1.2"
+    assert params["attachAlgoOrds"][0]["slTriggerPx"] == "105"
 
 
 def test_okx_swap_maps_reduce_only() -> None:
@@ -77,6 +93,20 @@ def test_okx_swap_converts_notional_to_contract_quantity() -> None:
     assert params["sz"] == "12"
 
 
+def test_okx_swap_real_open_requires_stop_loss() -> None:
+    rules = okx_swap_instrument_rules(_instruments(), "BTC-USDT-SWAP")
+
+    with pytest.raises(ValueError, match="stopLoss"):
+        okx_swap_order_precheck_params(_request(stop_loss=None), rules=rules)
+
+
+def test_okx_swap_rejects_stop_loss_on_wrong_side() -> None:
+    rules = okx_swap_instrument_rules(_instruments(), "BTC-USDT-SWAP")
+
+    with pytest.raises(ValueError, match="long stopLoss"):
+        okx_swap_order_precheck_params(_request(stop_loss=Decimal("101")), rules=rules)
+
+
 def test_okx_swap_rejects_stop_order_type() -> None:
     rules = okx_swap_instrument_rules(_instruments(), "BTC-USDT-SWAP")
 
@@ -103,11 +133,20 @@ def test_okx_swap_adapter_calls_order_precheck_not_place_order() -> None:
         "clientOrderId": api.precheck_calls[0]["params"]["clOrdId"],
         "executorAction": "order_precheck_validated",
         "mainnet": True,
-        "market": "okx_swap",
-        "normalizedOrder": {
-            "instId": "BTC-USDT-SWAP",
-            "ordType": "limit",
-            "posSide": "net",
+            "market": "okx_swap",
+            "normalizedOrder": {
+                "attachedStopLoss": {
+                    "attachAlgoClOrdId": api.precheck_calls[0]["params"]["attachAlgoOrds"][0][
+                        "attachAlgoClOrdId"
+                    ],
+                    "orderPrice": "market",
+                    "slOrdPx": "-1",
+                    "slTriggerPx": "95",
+                    "slTriggerPxType": "last",
+                },
+                "instId": "BTC-USDT-SWAP",
+                "ordType": "limit",
+                "posSide": "net",
             "px": "100",
             "side": "buy",
             "sz": "1.2",
@@ -138,11 +177,20 @@ def test_okx_swap_placement_adapter_prechecks_then_places_order() -> None:
         "clientOrderId": api.place_order_calls[0]["params"]["clOrdId"],
         "executorAction": "order_submitted",
         "mainnet": True,
-        "market": "okx_swap",
-        "normalizedOrder": {
-            "instId": "BTC-USDT-SWAP",
-            "ordType": "limit",
-            "posSide": "net",
+            "market": "okx_swap",
+            "normalizedOrder": {
+                "attachedStopLoss": {
+                    "attachAlgoClOrdId": api.place_order_calls[0]["params"]["attachAlgoOrds"][0][
+                        "attachAlgoClOrdId"
+                    ],
+                    "orderPrice": "market",
+                    "slOrdPx": "-1",
+                    "slTriggerPx": "95",
+                    "slTriggerPxType": "last",
+                },
+                "instId": "BTC-USDT-SWAP",
+                "ordType": "limit",
+                "posSide": "net",
             "px": "100",
             "side": "buy",
             "sz": "1.2",
@@ -186,11 +234,11 @@ class FakeOkxSwapApi:
         assert inst_id == "BTC-USDT-SWAP"
         return {"code": "0", "data": _instruments(), "msg": ""}
 
-    def order_precheck(self, params: dict[str, str]) -> dict[str, object]:
+    def order_precheck(self, params: dict[str, object]) -> dict[str, object]:
         self.precheck_calls.append({"endpoint": OKX_ORDER_PRECHECK_PATH, "params": params})
         return {"code": "0", "data": [], "msg": ""}
 
-    def place_order(self, params: dict[str, str]) -> dict[str, object]:
+    def place_order(self, params: dict[str, object]) -> dict[str, object]:
         self.place_order_calls.append({"params": params})
         return self.place_order_response
 
@@ -204,6 +252,7 @@ def _request(
     limit_price: Decimal = Decimal("100.06"),
     price_reference: Decimal | None = None,
     order_type: str = "limit",
+    stop_loss: Decimal | None = Decimal("95"),
 ) -> BrokerOrderRequest:
     return BrokerOrderRequest(
         provider="okx",
@@ -217,6 +266,7 @@ def _request(
         notional=notional,
         limit_price=limit_price,
         stop_price=None,
+        stop_loss=stop_loss,
         price_reference=price_reference,
         time_in_force=None,
         market="okx_swap",

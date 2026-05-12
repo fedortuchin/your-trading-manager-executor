@@ -17,8 +17,8 @@ OKX_ORDER_PRECHECK_PATH = "/api/v5/trade/order-precheck"
 
 class OkxSwapApi(Protocol):
     def get_instruments(self, *, inst_type: str, inst_id: str) -> dict[str, Any]: ...
-    def order_precheck(self, params: dict[str, str]) -> dict[str, Any]: ...
-    def place_order(self, params: dict[str, str]) -> dict[str, Any]: ...
+    def order_precheck(self, params: dict[str, Any]) -> dict[str, Any]: ...
+    def place_order(self, params: dict[str, Any]) -> dict[str, Any]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,10 +144,10 @@ class OkxSdkSwapApi:
     def get_instruments(self, *, inst_type: str, inst_id: str) -> dict[str, Any]:
         return self.account_api.get_instruments(instType=inst_type, instId=inst_id)
 
-    def order_precheck(self, params: dict[str, str]) -> dict[str, Any]:
+    def order_precheck(self, params: dict[str, Any]) -> dict[str, Any]:
         return self.trade_api._request_with_params("POST", OKX_ORDER_PRECHECK_PATH, params)
 
-    def place_order(self, params: dict[str, str]) -> dict[str, Any]:
+    def place_order(self, params: dict[str, Any]) -> dict[str, Any]:
         return self.trade_api.place_order(**params)
 
 
@@ -155,7 +155,7 @@ def okx_swap_order_precheck_params(
     request: BrokerOrderRequest,
     *,
     rules: OkxSwapInstrumentRules,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     return okx_swap_order_params(request, rules=rules)
 
 
@@ -163,11 +163,11 @@ def okx_swap_order_params(
     request: BrokerOrderRequest,
     *,
     rules: OkxSwapInstrumentRules,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     order_type = _okx_order_type(request.order_type)
     side = _okx_side(request)
     size = _normalized_size(request, rules=rules)
-    params = {
+    params: dict[str, Any] = {
         "clOrdId": _okx_client_order_id(request.client_order_id),
         "instId": rules.inst_id,
         "ordType": order_type,
@@ -184,6 +184,11 @@ def okx_swap_order_params(
         params["px"] = _decimal_text(
             _normalized_price(request.limit_price, side=side, rules=rules)
         )
+    if request.position_effect == "open":
+        if request.execution_mode == "real" and request.stop_loss is None:
+            raise ValueError("OKX real open orders require exchange-side stopLoss")
+        if request.stop_loss is not None:
+            params["attachAlgoOrds"] = [_okx_attached_stop_loss(request, rules=rules)]
     reject_secret_fields(params)
     return params
 
@@ -301,7 +306,7 @@ def _normalized_price(
     return _round_to_tick(value, tick_size=rules.tick_size, side=side)
 
 
-def _public_normalized_order(params: dict[str, str]) -> dict[str, str]:
+def _public_normalized_order(params: dict[str, Any]) -> dict[str, Any]:
     payload = {
         "instId": params["instId"],
         "ordType": params["ordType"],
@@ -313,6 +318,11 @@ def _public_normalized_order(params: dict[str, str]) -> dict[str, str]:
     for key in ("px", "reduceOnly"):
         if key in params:
             payload[key] = params[key]
+    attach_algo_orders = params.get("attachAlgoOrds")
+    if isinstance(attach_algo_orders, list):
+        stop_loss = _public_attached_stop_loss(attach_algo_orders)
+        if stop_loss is not None:
+            payload["attachedStopLoss"] = stop_loss
     reject_secret_fields(payload)
     return payload
 
@@ -320,6 +330,77 @@ def _public_normalized_order(params: dict[str, str]) -> dict[str, str]:
 def _okx_client_order_id(client_order_id: str) -> str:
     digest = hashlib.sha256(client_order_id.encode()).hexdigest()
     return f"ytm{digest[:29]}"
+
+
+def _okx_attached_algo_client_order_id(client_order_id: str, suffix: str) -> str:
+    digest = hashlib.sha256(f"{client_order_id}:{suffix}".encode()).hexdigest()
+    return f"ytm{suffix}{digest[:27]}"
+
+
+def _okx_attached_stop_loss(
+    request: BrokerOrderRequest,
+    *,
+    rules: OkxSwapInstrumentRules,
+) -> dict[str, str]:
+    if request.stop_loss is None:
+        raise ValueError("OKX attached stop-loss requires stopLoss")
+    trigger_price = _normalized_stop_loss_trigger_price(
+        request.stop_loss,
+        request=request,
+        rules=rules,
+    )
+    _validate_stop_loss_side(trigger_price, request=request)
+    return {
+        "attachAlgoClOrdId": _okx_attached_algo_client_order_id(
+            request.client_order_id,
+            "sl",
+        ),
+        "slOrdPx": "-1",
+        "slTriggerPx": _decimal_text(trigger_price),
+        "slTriggerPxType": "last",
+    }
+
+
+def _public_attached_stop_loss(items: list[object]) -> dict[str, str] | None:
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        trigger_price = _optional_text(item.get("slTriggerPx"))
+        order_price = _optional_text(item.get("slOrdPx"))
+        if trigger_price is None or order_price is None:
+            continue
+        payload = {
+            "attachAlgoClOrdId": _optional_text(item.get("attachAlgoClOrdId")) or "",
+            "orderPrice": "market" if order_price == "-1" else order_price,
+            "slOrdPx": order_price,
+            "slTriggerPx": trigger_price,
+            "slTriggerPxType": _optional_text(item.get("slTriggerPxType")) or "last",
+        }
+        return {key: value for key, value in payload.items() if value}
+    return None
+
+
+def _normalized_stop_loss_trigger_price(
+    value: Decimal,
+    *,
+    request: BrokerOrderRequest,
+    rules: OkxSwapInstrumentRules,
+) -> Decimal:
+    if request.side == "long":
+        return _round_to_tick(value, tick_size=rules.tick_size, side="sell")
+    if request.side == "short":
+        return _round_to_tick(value, tick_size=rules.tick_size, side="buy")
+    raise ValueError("OKX attached stop-loss side is unsupported")
+
+
+def _validate_stop_loss_side(value: Decimal, *, request: BrokerOrderRequest) -> None:
+    reference = request.limit_price if request.limit_price is not None else request.price_reference
+    if reference is None:
+        return
+    if request.side == "long" and value >= reference:
+        raise ValueError("OKX long stopLoss must be below entry price")
+    if request.side == "short" and value <= reference:
+        raise ValueError("OKX short stopLoss must be above entry price")
 
 
 def _okx_order_type(order_type: str) -> str:

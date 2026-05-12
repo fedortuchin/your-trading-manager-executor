@@ -34,7 +34,7 @@ Heartbeat may report non-secret local credential metadata:
 
 ```json
 {
-  "clientVersion": "0.7.4",
+  "clientVersion": "0.7.5",
   "heartbeatStatus": "online",
   "capabilities": {
     "leases": true,
@@ -111,9 +111,12 @@ margin mode.
 For OKX `real`, a command may explicitly request
 `commandPayload.adapter=okx_swap_mainnet_order`. This adapter is disabled unless the executor was
 started with `--enable-real-orders`. When enabled, the executor still repeats local risk checks,
-normalizes the order, calls OKX `order-precheck`, and only then calls `POST /api/v5/trade/order`.
-The sanitized result uses `executorAction=order_submitted` and includes `providerOrderId`; broker
-secrets and raw authorization data are never uploaded to YTM.
+requires `stopLoss` for opening orders, attaches that stop-loss to the entry order through OKX
+`attachAlgoOrds`, normalizes the order, calls OKX `order-precheck`, and only then calls
+`POST /api/v5/trade/order`. Attached stop-loss uses `slOrdPx=-1` for market execution after the
+trigger and `slTriggerPxType=last` by default. The sanitized result uses
+`executorAction=order_submitted` and includes `providerOrderId`; broker secrets and raw
+authorization data are never uploaded to YTM.
 
 ## Result
 

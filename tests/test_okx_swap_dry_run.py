@@ -53,6 +53,9 @@ def test_real_okx_swap_dry_run_reaches_order_precheck_without_placement(monkeypa
     assert decision.result_payload["adapterPreflight"] == "passed"
     assert decision.result_payload["adapterResult"]["executorAction"] == "order_precheck_validated"
     assert decision.result_payload["adapterResult"]["normalizedOrder"]["sz"] == "12"
+    assert decision.result_payload["adapterResult"]["normalizedOrder"]["attachedStopLoss"][
+        "slTriggerPx"
+    ] == "95"
     assert "okx-private-secret" not in repr(decision.result_payload)
     assert "okx-passphrase" not in repr(decision.result_payload)
 
@@ -131,7 +134,7 @@ class FakeOkxSwapApi:
             "msg": "",
         }
 
-    def order_precheck(self, params: dict[str, str]):
+    def order_precheck(self, params: dict[str, object]):
         self.precheck_calls.append({"endpoint": OKX_ORDER_PRECHECK_PATH, "params": params})
         return {"code": "0", "data": [], "msg": ""}
 
@@ -161,6 +164,7 @@ def _leased_real_okx_command() -> dict[str, object]:
             "provider": "okx",
             "side": "long",
             "status": "created",
+            "stopLoss": "95",
             "symbol": "BTCUSDT",
         },
         "lease": {"id": "lease-1"},

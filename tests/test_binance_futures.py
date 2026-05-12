@@ -153,6 +153,7 @@ def _request(
         notional=notional,
         limit_price=limit_price,
         stop_price=None,
+        stop_loss=None,
         price_reference=None,
         time_in_force=None,
     )

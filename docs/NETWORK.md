@@ -66,8 +66,9 @@ selected broker API domains. Expected examples:
   pre-trade normalization, and calls `test_order`, not `new_order`.
 - OKX: OKX REST API domain for the user's registered region. The current OKX SWAP mainnet adapter
   uses `python-okx==0.4.1`, reads `account/instruments`, and calls `trade/order-precheck`.
-  The disabled-by-default real adapter also calls `trade/order` after precheck when
-  `--enable-real-orders` is set. Reconciliation uses read-only account/order/algo/fill endpoints:
+  The disabled-by-default real adapter requires an opening-order stop-loss, attaches it through OKX
+  `attachAlgoOrds`, and also calls `trade/order` after precheck when `--enable-real-orders` is set.
+  Reconciliation uses read-only account/order/algo/fill endpoints:
   `account/balance`, `account/positions`, `trade/orders-pending`, `trade/orders-history`,
   `trade/order-algos-pending`, `trade/order-algos-history`, and `trade/fills-history`. The first
   build uses the standard `https://www.okx.com` domain; EU, US, AU, or other regional OKX accounts

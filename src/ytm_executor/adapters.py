@@ -33,6 +33,7 @@ class BrokerOrderRequest:
     notional: Decimal | None
     limit_price: Decimal | None
     stop_price: Decimal | None
+    stop_loss: Decimal | None
     price_reference: Decimal | None
     time_in_force: str | None
     market: str | None = None
@@ -99,6 +100,9 @@ def build_order_request(command: dict[str, Any], *, execution_mode: str) -> Brok
         ),
         limit_price=_optional_decimal(_first(command, payload, ("price", "limitPrice"))),
         stop_price=_optional_decimal(_first(command, payload, ("stopPrice", "triggerPrice"))),
+        stop_loss=_optional_decimal(
+            _first(command, payload, ("stopLoss", "stopLossTriggerPrice", "slTriggerPx"))
+        ),
         price_reference=_optional_decimal(
             _first(command, payload, ("priceReference", "entryPriceReference", "markPrice"))
         ),
@@ -141,6 +145,8 @@ def order_request_public_payload(request: BrokerOrderRequest) -> dict[str, Any]:
         payload["limitPrice"] = _decimal_text(request.limit_price)
     if request.stop_price is not None:
         payload["stopPrice"] = _decimal_text(request.stop_price)
+    if request.stop_loss is not None:
+        payload["stopLoss"] = _decimal_text(request.stop_loss)
     if request.price_reference is not None:
         payload["priceReference"] = _decimal_text(request.price_reference)
     if request.time_in_force:
