@@ -34,7 +34,7 @@ Heartbeat may report non-secret local credential metadata:
 
 ```json
 {
-  "clientVersion": "0.7.5",
+  "clientVersion": "0.7.6",
   "heartbeatStatus": "online",
   "capabilities": {
     "leases": true,
@@ -114,7 +114,11 @@ started with `--enable-real-orders`. When enabled, the executor still repeats lo
 requires `stopLoss` for opening orders, attaches that stop-loss to the entry order through OKX
 `attachAlgoOrds`, normalizes the order, calls OKX `order-precheck`, and only then calls
 `POST /api/v5/trade/order`. Attached stop-loss uses `slOrdPx=-1` for market execution after the
-trigger and `slTriggerPxType=last` by default. The sanitized result uses
+trigger and `slTriggerPxType=last` by default. After submit, the executor verifies a matching
+pending OKX stop-loss algo order. If no matching algo exists and no position is open yet, it reports
+`protectionStatus=pending_activation`. If a position is open without a matching stop-loss, it tries
+to place a standalone reduce-only conditional stop-loss and reports
+`protectionStatus=protected_remediated` or `protectionStatus=unprotected`. The sanitized result uses
 `executorAction=order_submitted` and includes `providerOrderId`; broker secrets and raw
 authorization data are never uploaded to YTM.
 

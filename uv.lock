@@ -1513,7 +1513,7 @@ wheels = [
 
 [[package]]
 name = "ytm-executor"
-version = "0.7.5"
+version = "0.7.6"
 source = { editable = "." }
 dependencies = [
     { name = "binance-sdk-derivatives-trading-usds-futures" },

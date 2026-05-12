@@ -17,8 +17,11 @@ OKX_ORDER_PRECHECK_PATH = "/api/v5/trade/order-precheck"
 
 class OkxSwapApi(Protocol):
     def get_instruments(self, *, inst_type: str, inst_id: str) -> dict[str, Any]: ...
+    def get_positions(self, *, inst_type: str, inst_id: str) -> dict[str, Any]: ...
     def order_precheck(self, params: dict[str, Any]) -> dict[str, Any]: ...
     def place_order(self, params: dict[str, Any]) -> dict[str, Any]: ...
+    def order_algos_pending(self, *, inst_type: str, inst_id: str) -> dict[str, Any]: ...
+    def place_algo_order(self, params: dict[str, Any]) -> dict[str, Any]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +117,14 @@ class OkxSwapMainnetOrderPlacementAdapter:
         provider_order_id = _optional_text(response.get("ordId"))
         if provider_order_id is None:
             raise ValueError("OKX place_order response missing ordId")
+        protection = _verify_or_remediate_stop_loss(
+            api=api,
+            request=request,
+            order_params=params,
+            order_response=response,
+            provider_order_id=provider_order_id,
+            rules=rules,
+        )
         payload = {
             "adapter": OKX_SWAP_MAINNET_ORDER_ADAPTER,
             "clientOrderId": params["clOrdId"],
@@ -122,6 +133,8 @@ class OkxSwapMainnetOrderPlacementAdapter:
             "market": "okx_swap",
             "normalizedOrder": _public_normalized_order(params),
             "precheck": "passed",
+            "protection": protection,
+            "protectionStatus": protection["status"],
             "provider": "okx",
             "providerOrderId": provider_order_id,
             "providerStatus": "accepted",
@@ -144,11 +157,20 @@ class OkxSdkSwapApi:
     def get_instruments(self, *, inst_type: str, inst_id: str) -> dict[str, Any]:
         return self.account_api.get_instruments(instType=inst_type, instId=inst_id)
 
+    def get_positions(self, *, inst_type: str, inst_id: str) -> dict[str, Any]:
+        return self.account_api.get_positions(instType=inst_type, instId=inst_id)
+
     def order_precheck(self, params: dict[str, Any]) -> dict[str, Any]:
         return self.trade_api._request_with_params("POST", OKX_ORDER_PRECHECK_PATH, params)
 
     def place_order(self, params: dict[str, Any]) -> dict[str, Any]:
         return self.trade_api.place_order(**params)
+
+    def order_algos_pending(self, *, inst_type: str, inst_id: str) -> dict[str, Any]:
+        return self.trade_api.order_algos_list(instType=inst_type, instId=inst_id)
+
+    def place_algo_order(self, params: dict[str, Any]) -> dict[str, Any]:
+        return self.trade_api.place_algo_order(**params)
 
 
 def okx_swap_order_precheck_params(
@@ -260,6 +282,272 @@ def _single_order_response(items: list[dict[str, Any]], endpoint: str) -> dict[s
         raise ValueError(f"OKX {endpoint} rejected request with code {status_code}")
     reject_secret_fields(response)
     return response
+
+
+def _verify_or_remediate_stop_loss(
+    *,
+    api: OkxSwapApi,
+    request: BrokerOrderRequest,
+    order_params: dict[str, Any],
+    order_response: dict[str, Any],
+    provider_order_id: str,
+    rules: OkxSwapInstrumentRules,
+) -> dict[str, Any]:
+    expected = _expected_stop_loss(order_params)
+    if expected is None:
+        return {
+            "reasonCode": "stop_loss_not_required",
+            "status": "not_required",
+        }
+
+    attach_response = _attached_stop_loss_response(
+        order_response.get("attachAlgoOrds"),
+        expected=expected,
+    )
+    if attach_response is not None:
+        fail_code = _optional_text(attach_response.get("failCode"))
+        if fail_code is not None:
+            return _remediate_stop_loss(
+                api=api,
+                request=request,
+                provider_order_id=provider_order_id,
+                rules=rules,
+                expected=expected,
+                reason_code="attached_stop_loss_rejected",
+                reason=(
+                    _optional_text(attach_response.get("failReason"))
+                    or f"OKX attached stop-loss failed with code {fail_code}"
+                ),
+            )
+
+    pending_match = _matching_pending_stop_loss(
+        _okx_response_data(
+            api.order_algos_pending(inst_type="SWAP", inst_id=rules.inst_id),
+            "order_algos_pending",
+        ),
+        expected=expected,
+        provider_order_id=provider_order_id,
+    )
+    if pending_match is not None:
+        return {
+            "algoClientOrderId": _optional_text(pending_match.get("algoClOrdId")),
+            "algoOrderId": _optional_text(pending_match.get("algoId")),
+            "slOrdPx": expected["slOrdPx"],
+            "slTriggerPx": expected["slTriggerPx"],
+            "slTriggerPxType": expected["slTriggerPxType"],
+            "status": "protected",
+            "verification": "pending_algo_order",
+        }
+
+    position = _matching_open_position(
+        _okx_response_data(
+            api.get_positions(inst_type="SWAP", inst_id=rules.inst_id),
+            "get_positions",
+        ),
+        rules=rules,
+    )
+    if position is None:
+        return {
+            "algoClientOrderId": expected["attachAlgoClOrdId"],
+            "reasonCode": "parent_order_not_filled",
+            "slOrdPx": expected["slOrdPx"],
+            "slTriggerPx": expected["slTriggerPx"],
+            "slTriggerPxType": expected["slTriggerPxType"],
+            "status": "pending_activation",
+            "verification": "no_open_position",
+        }
+    return _remediate_stop_loss(
+        api=api,
+        request=request,
+        provider_order_id=provider_order_id,
+        rules=rules,
+        expected=expected,
+        open_position=position,
+        reason_code="active_stop_loss_not_found",
+        reason="Open OKX position has no matching active stop-loss algo order.",
+    )
+
+
+def _expected_stop_loss(order_params: dict[str, Any]) -> dict[str, str] | None:
+    attach_algo_orders = order_params.get("attachAlgoOrds")
+    if not isinstance(attach_algo_orders, list):
+        return None
+    for item in attach_algo_orders:
+        if not isinstance(item, dict):
+            continue
+        trigger_price = _optional_text(item.get("slTriggerPx"))
+        order_price = _optional_text(item.get("slOrdPx"))
+        client_order_id = _optional_text(item.get("attachAlgoClOrdId"))
+        if trigger_price is None or order_price is None or client_order_id is None:
+            continue
+        return {
+            "attachAlgoClOrdId": client_order_id,
+            "slOrdPx": order_price,
+            "slTriggerPx": trigger_price,
+            "slTriggerPxType": _optional_text(item.get("slTriggerPxType")) or "last",
+        }
+    return None
+
+
+def _attached_stop_loss_response(
+    value: object,
+    *,
+    expected: dict[str, str],
+) -> dict[str, Any] | None:
+    if not isinstance(value, list):
+        return None
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        algo_client_order_id = _optional_text(item.get("attachAlgoClOrdId"))
+        if algo_client_order_id == expected["attachAlgoClOrdId"]:
+            return dict(item)
+    return None
+
+
+def _matching_pending_stop_loss(
+    items: list[dict[str, Any]],
+    *,
+    expected: dict[str, str],
+    provider_order_id: str,
+) -> dict[str, Any] | None:
+    for item in items:
+        algo_client_order_id = _optional_text(item.get("algoClOrdId"))
+        linked_order_id = _optional_text(item.get("ordId"))
+        trigger_price = _optional_text(item.get("slTriggerPx"))
+        order_price = _optional_text(item.get("slOrdPx"))
+        state = (_optional_text(item.get("state")) or "").lower()
+        if state and state not in {"live", "effective", "partially_effective"}:
+            continue
+        if trigger_price != expected["slTriggerPx"] or order_price != expected["slOrdPx"]:
+            continue
+        if algo_client_order_id == expected["attachAlgoClOrdId"]:
+            return dict(item)
+        if linked_order_id and linked_order_id == provider_order_id:
+            return dict(item)
+    return None
+
+
+def _matching_open_position(
+    items: list[dict[str, Any]],
+    *,
+    rules: OkxSwapInstrumentRules,
+) -> dict[str, Any] | None:
+    for item in items:
+        if str(item.get("instId") or "").upper() != rules.inst_id:
+            continue
+        size = _optional_abs_decimal(item.get("pos"), "pos")
+        if size is not None and size > 0:
+            result = dict(item)
+            result["normalizedSize"] = _decimal_text(size)
+            return result
+    return None
+
+
+def _remediate_stop_loss(
+    *,
+    api: OkxSwapApi,
+    request: BrokerOrderRequest,
+    provider_order_id: str,
+    rules: OkxSwapInstrumentRules,
+    expected: dict[str, str],
+    reason_code: str,
+    reason: str,
+    open_position: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    position = open_position
+    if position is None:
+        position = _matching_open_position(
+            _okx_response_data(
+                api.get_positions(inst_type="SWAP", inst_id=rules.inst_id),
+                "get_positions",
+            ),
+            rules=rules,
+        )
+    if position is None:
+        return {
+            "algoClientOrderId": expected["attachAlgoClOrdId"],
+            "reason": reason,
+            "reasonCode": reason_code,
+            "slOrdPx": expected["slOrdPx"],
+            "slTriggerPx": expected["slTriggerPx"],
+            "slTriggerPxType": expected["slTriggerPxType"],
+            "status": "pending_activation",
+            "verification": "no_open_position_after_attach_failure",
+        }
+    try:
+        remediation_params = _remediation_stop_loss_params(
+            request=request,
+            provider_order_id=provider_order_id,
+            position=position,
+            rules=rules,
+            expected=expected,
+        )
+        response = _single_order_response(
+            _okx_response_data(api.place_algo_order(remediation_params), "place_algo_order"),
+            "place_algo_order",
+        )
+    except ValueError as exc:
+        return {
+            "actionRequired": "manual_intervention",
+            "reason": str(exc),
+            "reasonCode": "stop_loss_remediation_failed",
+            "slOrdPx": expected["slOrdPx"],
+            "slTriggerPx": expected["slTriggerPx"],
+            "slTriggerPxType": expected["slTriggerPxType"],
+            "status": "unprotected",
+            "verification": reason_code,
+        }
+    return {
+        "algoClientOrderId": remediation_params["algoClOrdId"],
+        "algoOrderId": _optional_text(response.get("algoId")),
+        "remediated": True,
+        "remediationReasonCode": reason_code,
+        "slOrdPx": expected["slOrdPx"],
+        "slTriggerPx": expected["slTriggerPx"],
+        "slTriggerPxType": expected["slTriggerPxType"],
+        "status": "protected_remediated",
+        "verification": "standalone_stop_loss_algo_order",
+    }
+
+
+def _remediation_stop_loss_params(
+    *,
+    request: BrokerOrderRequest,
+    provider_order_id: str,
+    position: dict[str, Any],
+    rules: OkxSwapInstrumentRules,
+    expected: dict[str, str],
+) -> dict[str, Any]:
+    size = _optional_abs_decimal(position.get("pos"), "pos")
+    if size is None or size <= 0:
+        raise ValueError("OKX open position size is missing for stop-loss remediation")
+    position_side = _okx_position_close_side(position=position, request=request)
+    return {
+        "algoClOrdId": _okx_attached_algo_client_order_id(
+            f"{request.client_order_id}:{provider_order_id}",
+            "sr",
+        ),
+        "instId": rules.inst_id,
+        "ordType": "conditional",
+        "posSide": "net",
+        "reduceOnly": "true",
+        "side": position_side,
+        "slOrdPx": expected["slOrdPx"],
+        "slTriggerPx": expected["slTriggerPx"],
+        "slTriggerPxType": expected["slTriggerPxType"],
+        "sz": _decimal_text(_round_down_to_step(size, rules.lot_size)),
+        "tdMode": _okx_td_mode(request.margin_mode),
+    }
+
+
+def _okx_position_close_side(*, position: dict[str, Any], request: BrokerOrderRequest) -> str:
+    raw_pos = _optional_decimal(position.get("pos"), "pos")
+    if raw_pos is not None and raw_pos < 0:
+        return "buy"
+    if raw_pos is not None and raw_pos > 0:
+        return "sell"
+    return "sell" if request.side == "long" else "buy"
 
 
 def _normalized_size(
@@ -464,6 +752,17 @@ def _required_positive_decimal(value: object, field_name: str) -> Decimal:
     if decimal <= 0:
         raise ValueError(f"OKX {field_name} must be positive")
     return decimal
+
+
+def _optional_decimal(value: object, field_name: str) -> Decimal | None:
+    if value in (None, ""):
+        return None
+    return _decimal(value, field_name)
+
+
+def _optional_abs_decimal(value: object, field_name: str) -> Decimal | None:
+    decimal = _optional_decimal(value, field_name)
+    return abs(decimal) if decimal is not None else None
 
 
 def _decimal(value: object, field_name: str) -> Decimal:

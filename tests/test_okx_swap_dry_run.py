@@ -134,12 +134,21 @@ class FakeOkxSwapApi:
             "msg": "",
         }
 
+    def get_positions(self, *, inst_type: str, inst_id: str):
+        raise AssertionError("positions must not be queried for validate-only precheck")
+
     def order_precheck(self, params: dict[str, object]):
         self.precheck_calls.append({"endpoint": OKX_ORDER_PRECHECK_PATH, "params": params})
         return {"code": "0", "data": [], "msg": ""}
 
     def place_order(self, **kwargs):
         raise AssertionError("place_order must not be called")
+
+    def order_algos_pending(self, *, inst_type: str, inst_id: str):
+        raise AssertionError("algo orders must not be queried for validate-only precheck")
+
+    def place_algo_order(self, params: dict[str, object]):
+        raise AssertionError("algo orders must not be placed for validate-only precheck")
 
 
 def _leased_real_okx_command() -> dict[str, object]:
