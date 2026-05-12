@@ -21,9 +21,38 @@ def test_okx_reconciliation_snapshot_is_sanitized_and_normalized() -> None:
     assert api.order_calls == [{"inst_type": "SWAP", "state": ""}]
     assert api.order_history_calls == [{"inst_type": "SWAP", "limit": "100", "state": ""}]
     assert api.fill_history_calls == [{"inst_type": "SWAP", "limit": "100"}]
+    assert api.algo_list_calls == [
+        {"inst_type": "SWAP", "limit": "100", "ord_type": "conditional"},
+        {"inst_type": "SWAP", "limit": "100", "ord_type": "oco"},
+        {"inst_type": "SWAP", "limit": "100", "ord_type": "trigger"},
+        {"inst_type": "SWAP", "limit": "100", "ord_type": "move_order_stop"},
+    ]
+    assert api.algo_history_calls == [
+        {"inst_type": "SWAP", "limit": "100", "ord_type": "conditional", "state": ""},
+        {"inst_type": "SWAP", "limit": "100", "ord_type": "oco", "state": ""},
+        {"inst_type": "SWAP", "limit": "100", "ord_type": "trigger", "state": ""},
+        {"inst_type": "SWAP", "limit": "100", "ord_type": "move_order_stop", "state": ""},
+    ]
     assert snapshot["provider"] == "okx"
     assert snapshot["market"] == "okx_swap"
     assert snapshot["capturedAt"] == "2026-05-10T10:15:00Z"
+    assert snapshot["algoOrders"] == [
+        {
+            "actualSide": "sl",
+            "algoClientOrderId": "algo-close-sl",
+            "algoOrderId": "algo-1",
+            "closeSource": "stop_loss",
+            "instrumentId": "BTC-USDT-SWAP",
+            "linkedOrderId": "order-2",
+            "orderType": "conditional",
+            "positionSide": "net",
+            "side": "sell",
+            "state": "effective",
+            "stopLossOrderPrice": "-1",
+            "stopLossTriggerPrice": "95",
+            "symbol": "BTCUSDT",
+        }
+    ]
     assert snapshot["balances"] == [
         {
             "availableBalance": "100",
@@ -82,6 +111,23 @@ def test_okx_reconciliation_snapshot_is_sanitized_and_normalized() -> None:
             "side": "buy",
             "state": "filled",
             "symbol": "BTCUSDT",
+        },
+        {
+            "actualSide": "sl",
+            "averageFillPrice": "95",
+            "clientOrderId": "manual-close-1",
+            "closeSource": "stop_loss",
+            "filledQuantity": "2",
+            "instrumentId": "BTC-USDT-SWAP",
+            "orderType": "market",
+            "positionSide": "net",
+            "price": "95",
+            "providerOrderId": "order-2",
+            "quantity": "2",
+            "reduceOnly": True,
+            "side": "sell",
+            "state": "filled",
+            "symbol": "BTCUSDT",
         }
     ]
     assert snapshot["fills"] == [
@@ -99,8 +145,45 @@ def test_okx_reconciliation_snapshot_is_sanitized_and_normalized() -> None:
             "providerOrderId": "order-1",
             "side": "buy",
             "symbol": "BTCUSDT",
+        },
+        {
+            "clientOrderId": "manual-close-1",
+            "closeSource": "stop_loss",
+            "execType": "T",
+            "feeAmount": "-0.03",
+            "feeCurrency": "USDT",
+            "fillId": "fill-2",
+            "fillPrice": "95",
+            "fillQuantity": "2",
+            "fillTime": "1770000001000",
+            "instrumentId": "BTC-USDT-SWAP",
+            "orderType": "market",
+            "positionSide": "net",
+            "providerOrderId": "order-2",
+            "realizedPnl": "-10",
+            "side": "sell",
+            "symbol": "BTCUSDT",
         }
     ]
+    assert "okx-private-secret" not in repr(snapshot)
+    assert "okx-passphrase" not in repr(snapshot)
+
+
+def test_okx_reconciliation_keeps_core_snapshot_when_algo_history_fails() -> None:
+    api = FailingAlgoHistoryOkxReconciliationApi()
+    adapter = OkxSwapReconciliationAdapter(
+        api_key="okx-public-key",
+        api_secret="okx-private-secret",
+        passphrase="okx-passphrase",
+        api=api,
+    )
+
+    snapshot = adapter.capture_snapshot(now=datetime(2026, 5, 10, 10, 15, tzinfo=UTC))
+
+    assert "algo_orders_history_conditional_unavailable" in snapshot["warnings"]
+    assert snapshot["balances"]
+    assert snapshot["fills"][1]["closeSource"] == "stop_loss"
+    assert snapshot["fills"][1]["realizedPnl"] == "-10"
     assert "okx-private-secret" not in repr(snapshot)
     assert "okx-passphrase" not in repr(snapshot)
 
@@ -112,6 +195,8 @@ class FakeOkxReconciliationApi:
         self.order_calls: list[dict[str, str]] = []
         self.order_history_calls: list[dict[str, str]] = []
         self.fill_history_calls: list[dict[str, str]] = []
+        self.algo_list_calls: list[dict[str, str]] = []
+        self.algo_history_calls: list[dict[str, str]] = []
 
     def get_account_balance(self, ccy: str = ""):
         self.balance_calls += 1
@@ -201,6 +286,21 @@ class FakeOkxReconciliationApi:
                     "side": "buy",
                     "state": "filled",
                     "sz": "2",
+                },
+                {
+                    "accFillSz": "2",
+                    "actualSide": "sl",
+                    "avgPx": "95",
+                    "clOrdId": "manual-close-1",
+                    "instId": "BTC-USDT-SWAP",
+                    "ordId": "order-2",
+                    "ordType": "market",
+                    "posSide": "net",
+                    "px": "95",
+                    "reduceOnly": "true",
+                    "side": "sell",
+                    "state": "filled",
+                    "sz": "2",
                 }
             ],
             "msg": "",
@@ -224,7 +324,79 @@ class FakeOkxReconciliationApi:
                     "ordType": "limit",
                     "posSide": "net",
                     "side": "buy",
+                },
+                {
+                    "billId": "fill-2",
+                    "clOrdId": "manual-close-1",
+                    "execType": "T",
+                    "fee": "-0.03",
+                    "feeCcy": "USDT",
+                    "fillPnl": "-10",
+                    "fillPx": "95",
+                    "fillSz": "2",
+                    "fillTime": "1770000001000",
+                    "instId": "BTC-USDT-SWAP",
+                    "ordId": "order-2",
+                    "ordType": "market",
+                    "posSide": "net",
+                    "side": "sell",
                 }
             ],
             "msg": "",
         }
+
+    def order_algos_list(self, ord_type: str = "", inst_type: str = "", limit: str = ""):
+        self.algo_list_calls.append(
+            {"inst_type": inst_type, "limit": limit, "ord_type": ord_type}
+        )
+        return {"code": "0", "data": [], "msg": ""}
+
+    def order_algos_history(
+        self,
+        ord_type: str,
+        state: str = "",
+        inst_type: str = "",
+        limit: str = "",
+    ):
+        self.algo_history_calls.append(
+            {"inst_type": inst_type, "limit": limit, "ord_type": ord_type, "state": state}
+        )
+        if ord_type != "conditional":
+            return {"code": "0", "data": [], "msg": ""}
+        return {
+            "code": "0",
+            "data": [
+                {
+                    "actualSide": "sl",
+                    "algoClOrdId": "algo-close-sl",
+                    "algoId": "algo-1",
+                    "instId": "BTC-USDT-SWAP",
+                    "ordId": "order-2",
+                    "ordType": "conditional",
+                    "posSide": "net",
+                    "side": "sell",
+                    "slOrdPx": "-1",
+                    "slTriggerPx": "95",
+                    "state": "effective",
+                }
+            ],
+            "msg": "",
+        }
+
+
+class FailingAlgoHistoryOkxReconciliationApi(FakeOkxReconciliationApi):
+    def order_algos_history(
+        self,
+        ord_type: str,
+        state: str = "",
+        inst_type: str = "",
+        limit: str = "",
+    ):
+        if ord_type == "conditional":
+            raise ValueError("temporary OKX algo endpoint failure")
+        return super().order_algos_history(
+            ord_type=ord_type,
+            state=state,
+            inst_type=inst_type,
+            limit=limit,
+        )

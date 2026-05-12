@@ -53,7 +53,8 @@ Known limits:
 - the secret-field guard prevents common accidental leaks by checking field names, but it is not a
   formal proof that arbitrary text payloads cannot contain secrets;
 - users should harden SSH access, backups, host firewall rules, and broker-side API restrictions;
-- no real broker order adapters are enabled in the current foundation build.
+- real broker order adapters remain disabled by default unless the user explicitly starts the
+  executor with a real-order runtime flag.
 - the Binance USD-M Futures mainnet adapter reads `exchangeInfo`, normalizes the order locally, and
   calls `test_order`, not `new_order`; it is validation-only.
 - the OKX SWAP mainnet adapter reads `account/instruments`, normalizes symbol, contract size, and
@@ -61,8 +62,9 @@ Known limits:
 - the OKX SWAP real adapter is disabled by default and requires `--enable-real-orders`, local
   `paperOnly=false`, the exact real adapter name from an approved command, and successful
   `order-precheck` before it calls `trade/order`.
-- OKX reconciliation capture uses read-only account balance, positions, and pending-order
-  endpoints, then uploads only normalized provider state to YTM.
+- OKX reconciliation capture uses read-only account balance, positions, order, algo-order, and fill
+  endpoints, then uploads only normalized provider state, fees, PnL, and inferred close source to
+  YTM.
 - local preflight currently rejects all `real` commands even if YTM leases one by mistake.
 - missing, disabled, incomplete, or kill-switched local risk policy rejects provider-backed
   commands before any adapter can run.

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 from urllib import request
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 from ytm_executor.guards import reject_secret_fields
 
@@ -19,6 +19,7 @@ class Transport(Protocol):
         url: str,
         payload: dict[str, Any],
         headers: dict[str, str],
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]: ...
 
 
@@ -32,11 +33,13 @@ class HttpTransport:
         url: str,
         payload: dict[str, Any],
         headers: dict[str, str],
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
         api_request = request.Request(url, data=body, headers=headers, method="POST")
         try:
-            with request.urlopen(api_request, timeout=self.timeout_seconds) as response:
+            timeout = self.timeout_seconds if timeout_seconds is None else timeout_seconds
+            with request.urlopen(api_request, timeout=timeout) as response:
                 raw = response.read().decode("utf-8")
         except HTTPError as exc:
             detail = exc.read().decode("utf-8")
@@ -91,11 +94,24 @@ class YtmClient:
             access_token=access_token,
         )
 
-    def lease_command(self, *, access_token: str) -> dict[str, Any]:
+    def lease_command(
+        self,
+        *,
+        access_token: str,
+        wait_seconds: float = 0.0,
+        poll_interval_seconds: float = 1.0,
+    ) -> dict[str, Any]:
+        query = urlencode(
+            {
+                "pollIntervalSeconds": poll_interval_seconds,
+                "waitSeconds": wait_seconds,
+            }
+        )
         return self._post(
-            path="/api/executor/commands/lease",
+            path=f"/api/executor/commands/lease?{query}",
             payload={},
             access_token=access_token,
+            timeout_seconds=max(15.0, float(wait_seconds) + 10.0),
         )
 
     def record_command_result(
@@ -148,6 +164,7 @@ class YtmClient:
         path: str,
         payload: dict[str, Any],
         access_token: str | None,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         reject_secret_fields(payload)
         url = f"{self.server_url.rstrip('/')}{path}"
@@ -157,4 +174,9 @@ class YtmClient:
         headers = {"Content-Type": "application/json"}
         if access_token is not None:
             headers["Authorization"] = f"Bearer {access_token}"
-        return self.transport.post(url=url, payload=payload, headers=headers)
+        return self.transport.post(
+            url=url,
+            payload=payload,
+            headers=headers,
+            timeout_seconds=timeout_seconds,
+        )

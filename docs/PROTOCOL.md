@@ -34,7 +34,7 @@ Heartbeat may report non-secret local credential metadata:
 
 ```json
 {
-  "clientVersion": "0.7.2",
+  "clientVersion": "0.7.4",
   "heartbeatStatus": "online",
   "capabilities": {
     "leases": true,
@@ -67,11 +67,16 @@ is a sanitized summary only.
 ## Lease
 
 ```text
-POST /api/executor/commands/lease
+POST /api/executor/commands/lease?waitSeconds=25&pollIntervalSeconds=1
 Authorization: Bearer <executor access token>
 ```
 
-YTM returns either `item: null` or one command for the executor's broker account.
+YTM returns either `item: null` or one command for the executor's broker account. `waitSeconds`
+enables bounded long-polling: the request may stay open while YTM waits for a command, but the
+executor still receives at most one leased command per response. After processing a command, the
+executor immediately opens the next lease request, so multiple queued commands are drained without
+waiting for the heartbeat or reconciliation intervals. `pollIntervalSeconds` controls the
+server-side check cadence during the open request; broker secrets are still never included.
 
 The executor repeats local checks after leasing. A provider-backed command is rejected locally when
 the local risk policy is missing, disabled, kill-switched, paper-only for `real`, or the command
@@ -138,9 +143,11 @@ Request contains:
 Broker secrets, API keys, Authorization headers, and token-like fields are rejected before upload.
 The executor can upload a caller-provided JSON snapshot or capture an OKX SWAP read-only snapshot
 itself with `ytm-executor reconciliation capture-okx`. OKX capture calls `account/balance`,
-`account/positions`, `trade/orders-pending`, `trade/orders-history`, and `trade/fills-history`,
-normalizes balances, positions, open orders, order history, and fills, and uploads that sanitized
-state to YTM. `ytm-executor run --reconcile-okx` performs the same capture periodically.
+`account/positions`, `trade/orders-pending`, `trade/orders-history`, `trade/order-algos-pending`,
+`trade/order-algos-history`, and `trade/fills-history`, normalizes balances, positions, open
+orders, order history, algo TP/SL metadata, fills, fees, fill PnL, and inferred close-source labels,
+and uploads that sanitized state to YTM. `ytm-executor run --reconcile-okx` performs the same
+capture periodically.
 
 YTM applies an `ok` snapshot only through deterministic, idempotent rules. Known provider orders can
 move to accepted/partially filled/filled/canceled/rejected states. Provider fills are keyed by

@@ -6,9 +6,9 @@ import argparse
 import getpass
 import json
 import sys
-import time
 from decimal import Decimal
 from pathlib import Path
+from threading import Event, Thread
 from urllib.parse import urlparse
 
 from ytm_executor import __version__
@@ -56,11 +56,20 @@ def main(argv: list[str] | None = None) -> int:
 
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("--once", action="store_true")
-    run_parser.add_argument("--interval-seconds", default=5, type=int)
+    run_parser.add_argument(
+        "--interval-seconds",
+        default=None,
+        type=float,
+        help="Deprecated compatibility flag; use heartbeat/lease interval flags instead.",
+    )
+    run_parser.add_argument("--heartbeat-interval-seconds", default=15.0, type=float)
+    run_parser.add_argument("--lease-wait-seconds", default=25.0, type=float)
+    run_parser.add_argument("--lease-poll-interval-seconds", default=1.0, type=float)
+    run_parser.add_argument("--retry-interval-seconds", default=5.0, type=float)
     run_parser.add_argument("--enable-real-orders", action="store_true")
     run_parser.add_argument("--reconcile-okx", action="store_true")
     run_parser.add_argument("--reconciliation-broker-name", default="main")
-    run_parser.add_argument("--reconciliation-interval-seconds", default=60, type=int)
+    run_parser.add_argument("--reconciliation-interval-seconds", default=60.0, type=float)
 
     broker_parser = subparsers.add_parser("broker")
     broker_subparsers = broker_parser.add_subparsers(dest="broker_command", required=True)
@@ -163,59 +172,188 @@ def _run(args: argparse.Namespace) -> int:
     store = _store(args)
     validation_store = _validation_store(args)
     client = YtmClient(server_url=state.server_url, allowed_hosts=state.allowed_hosts)
-    last_reconciliation_at = 0.0
-    while True:
-        risk_policy = read_risk_policy(Path(args.risk_policy_file))
-        capabilities = {"leases": True, "zeroSecret": True}
-        capabilities.update(
-            store.heartbeat_capability(
-                validation_summaries=validation_store.list_public(),
-            )
-        )
-        capabilities["localRiskPolicy"] = risk_policy_public_summary(risk_policy)
-        client.heartbeat(
+    if args.once:
+        _send_heartbeat(
+            client=client,
             access_token=state.access_token,
-            capabilities=capabilities,
-            client_version=CLIENT_VERSION,
+            store=store,
+            validation_store=validation_store,
+            risk_policy_file=Path(args.risk_policy_file),
         )
-        lease_response = client.lease_command(access_token=state.access_token)
-        item = lease_response.get("item")
-        if isinstance(item, dict):
-            print(json.dumps(item, ensure_ascii=False, sort_keys=True))
-            decision = preflight_command(
-                item,
-                local_credentials=store.list(),
-                local_secret_resolver=lambda provider, name: store.get(
-                    provider=provider,
-                    name=name,
-                ),
-                risk_policy=risk_policy,
-                risk_state=read_risk_state(Path(args.risk_state_file)),
-                validation_summaries=validation_store.list_public(),
-                real_order_placement_enabled=args.enable_real_orders,
-            )
-            _record_preflight_decision(client, state.access_token, item, decision)
+        lease_response = client.lease_command(
+            access_token=state.access_token,
+            wait_seconds=0.0,
+            poll_interval_seconds=args.lease_poll_interval_seconds,
+        )
+        _process_lease_response(
+            args=args,
+            client=client,
+            access_token=state.access_token,
+            store=store,
+            validation_store=validation_store,
+            lease_response=lease_response,
+        )
         if args.reconcile_okx:
-            now_monotonic = time.monotonic()
-            if (
-                now_monotonic - last_reconciliation_at
-                >= max(1, int(args.reconciliation_interval_seconds))
-            ):
-                try:
-                    response = _capture_and_upload_okx_reconciliation(
-                        client=client,
-                        access_token=state.access_token,
-                        store=store,
-                        name=args.reconciliation_broker_name,
-                        execution_mode=None,
-                    )
-                    print(json.dumps(response, ensure_ascii=False, sort_keys=True))
-                except Exception as exc:
-                    print(f"OKX reconciliation failed: {exc}", file=sys.stderr)
-                last_reconciliation_at = now_monotonic
-        if args.once:
-            return 0
-        time.sleep(max(1, int(args.interval_seconds)))
+            response = _capture_and_upload_okx_reconciliation(
+                client=client,
+                access_token=state.access_token,
+                store=store,
+                name=args.reconciliation_broker_name,
+                execution_mode=None,
+            )
+            print(json.dumps(response, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    stop_event = Event()
+    heartbeat_thread = Thread(
+        target=_heartbeat_loop,
+        kwargs={
+            "client": client,
+            "access_token": state.access_token,
+            "store": store,
+            "validation_store": validation_store,
+            "risk_policy_file": Path(args.risk_policy_file),
+            "interval_seconds": max(1.0, float(args.heartbeat_interval_seconds)),
+            "stop_event": stop_event,
+        },
+        daemon=True,
+    )
+    heartbeat_thread.start()
+    if args.reconcile_okx:
+        Thread(
+            target=_okx_reconciliation_loop,
+            kwargs={
+                "client": client,
+                "access_token": state.access_token,
+                "store": store,
+                "name": args.reconciliation_broker_name,
+                "interval_seconds": max(1.0, float(args.reconciliation_interval_seconds)),
+                "stop_event": stop_event,
+            },
+            daemon=True,
+        ).start()
+
+    while True:
+        try:
+            lease_response = client.lease_command(
+                access_token=state.access_token,
+                wait_seconds=max(0.0, float(args.lease_wait_seconds)),
+                poll_interval_seconds=max(0.1, float(args.lease_poll_interval_seconds)),
+            )
+            _process_lease_response(
+                args=args,
+                client=client,
+                access_token=state.access_token,
+                store=store,
+                validation_store=validation_store,
+                lease_response=lease_response,
+            )
+        except Exception as exc:
+            print(f"YTM command long-poll failed: {exc}", file=sys.stderr)
+            stop_event.wait(max(1.0, float(args.retry_interval_seconds)))
+
+
+def _heartbeat_loop(
+    *,
+    client: YtmClient,
+    access_token: str,
+    store: LocalSecretStore,
+    validation_store: LocalValidationStore,
+    risk_policy_file: Path,
+    interval_seconds: float,
+    stop_event: Event,
+) -> None:
+    while not stop_event.is_set():
+        try:
+            _send_heartbeat(
+                client=client,
+                access_token=access_token,
+                store=store,
+                validation_store=validation_store,
+                risk_policy_file=risk_policy_file,
+            )
+        except Exception as exc:
+            print(f"YTM heartbeat failed: {exc}", file=sys.stderr)
+        stop_event.wait(interval_seconds)
+
+
+def _send_heartbeat(
+    *,
+    client: YtmClient,
+    access_token: str,
+    store: LocalSecretStore,
+    validation_store: LocalValidationStore,
+    risk_policy_file: Path,
+) -> None:
+    risk_policy = read_risk_policy(risk_policy_file)
+    capabilities = {"leases": True, "longPollLeases": True, "zeroSecret": True}
+    capabilities.update(
+        store.heartbeat_capability(
+            validation_summaries=validation_store.list_public(),
+        )
+    )
+    capabilities["localRiskPolicy"] = risk_policy_public_summary(risk_policy)
+    client.heartbeat(
+        access_token=access_token,
+        capabilities=capabilities,
+        client_version=CLIENT_VERSION,
+    )
+
+
+def _okx_reconciliation_loop(
+    *,
+    client: YtmClient,
+    access_token: str,
+    store: LocalSecretStore,
+    name: str,
+    interval_seconds: float,
+    stop_event: Event,
+) -> None:
+    while not stop_event.is_set():
+        try:
+            response = _capture_and_upload_okx_reconciliation(
+                client=client,
+                access_token=access_token,
+                store=store,
+                name=name,
+                execution_mode=None,
+            )
+            print(json.dumps(response, ensure_ascii=False, sort_keys=True))
+        except Exception as exc:
+            print(f"OKX reconciliation failed: {exc}", file=sys.stderr)
+        stop_event.wait(interval_seconds)
+
+
+def _process_lease_response(
+    *,
+    args: argparse.Namespace,
+    client: YtmClient,
+    access_token: str,
+    store: LocalSecretStore,
+    validation_store: LocalValidationStore,
+    lease_response: dict[str, object],
+) -> None:
+    blocked = lease_response.get("blocked")
+    if isinstance(blocked, dict):
+        print(json.dumps({"blocked": blocked}, ensure_ascii=False, sort_keys=True))
+    item = lease_response.get("item")
+    if not isinstance(item, dict):
+        return
+    print(json.dumps(item, ensure_ascii=False, sort_keys=True))
+    risk_policy = read_risk_policy(Path(args.risk_policy_file))
+    decision = preflight_command(
+        item,
+        local_credentials=store.list(),
+        local_secret_resolver=lambda provider, name: store.get(
+            provider=provider,
+            name=name,
+        ),
+        risk_policy=risk_policy,
+        risk_state=read_risk_state(Path(args.risk_state_file)),
+        validation_summaries=validation_store.list_public(),
+        real_order_placement_enabled=args.enable_real_orders,
+    )
+    _record_preflight_decision(client, access_token, item, decision)
 
 
 def _broker(args: argparse.Namespace) -> int:

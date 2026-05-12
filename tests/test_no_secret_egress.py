@@ -24,8 +24,16 @@ class CaptureTransport:
         url: str,
         payload: dict[str, Any],
         headers: dict[str, str],
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
-        self.requests.append({"headers": headers, "payload": payload, "url": url})
+        self.requests.append(
+            {
+                "headers": headers,
+                "payload": payload,
+                "timeout_seconds": timeout_seconds,
+                "url": url,
+            }
+        )
         return self.responses.pop(0)
 
 
@@ -88,12 +96,19 @@ def test_local_broker_token_is_not_sent_to_ytm(tmp_path: Path) -> None:
         capabilities=capabilities,
         client_version="test",
     )
-    client.lease_command(access_token=enrolled["accessToken"])
+    client.lease_command(
+        access_token=enrolled["accessToken"],
+        poll_interval_seconds=0.5,
+        wait_seconds=25,
+    )
 
     raw_requests = repr(transport.requests)
     assert "tbank-secret-token" not in raw_requests
     assert "localCredentials" in raw_requests
     assert "main" in raw_requests
+    assert "waitSeconds=25" in transport.requests[-1]["url"]
+    assert "pollIntervalSeconds=0.5" in transport.requests[-1]["url"]
+    assert transport.requests[-1]["timeout_seconds"] == 35.0
 
 
 def test_validated_broker_secret_is_not_sent_to_ytm(tmp_path: Path) -> None:

@@ -9,6 +9,9 @@ from typing import Any, Protocol
 from ytm_executor.guards import reject_secret_fields
 from ytm_executor.okx_swap import _okx_response_data, okx_swap_instrument_id
 
+OKX_RECONCILIATION_ALGO_ORDER_TYPES = ("conditional", "oco", "trigger", "move_order_stop")
+YTM_OKX_CLIENT_ORDER_PREFIX = "ytm"
+
 
 class OkxReconciliationApi(Protocol):
     def get_account_balance(self, ccy: str = "") -> dict[str, Any]: ...
@@ -28,6 +31,19 @@ class OkxReconciliationApi(Protocol):
     def get_fills_history(
         self,
         inst_type: str,
+        limit: str = "",
+    ) -> dict[str, Any]: ...
+    def order_algos_list(
+        self,
+        ord_type: str = "",
+        inst_type: str = "",
+        limit: str = "",
+    ) -> dict[str, Any]: ...
+    def order_algos_history(
+        self,
+        ord_type: str,
+        state: str = "",
+        inst_type: str = "",
         limit: str = "",
     ) -> dict[str, Any]: ...
 
@@ -59,14 +75,18 @@ class OkxSwapReconciliationAdapter:
             api.get_orders_history(inst_type="SWAP", limit="100"),
             "orders_history",
         )
+        warnings: list[str] = []
+        algo_orders = _capture_algo_orders(api, warnings=warnings)
         fills = _okx_response_data(
             api.get_fills_history(inst_type="SWAP", limit="100"),
             "fills_history",
         )
+        close_sources = _close_sources_by_order_ref((*orders, *order_history, *algo_orders))
         snapshot = {
+            "algoOrders": _sanitize_algo_orders(algo_orders),
             "balances": _sanitize_balances(balances),
             "capturedAt": _iso_z(captured_at),
-            "fills": _sanitize_fills(fills),
+            "fills": _sanitize_fills(fills, close_sources=close_sources),
             "market": "okx_swap",
             "orderHistory": _sanitize_orders(order_history),
             "openOrders": _sanitize_orders(orders),
@@ -75,6 +95,8 @@ class OkxSwapReconciliationAdapter:
             "source": "executor_okx_reconciliation",
             "zeroSecret": True,
         }
+        if warnings:
+            snapshot["warnings"] = warnings
         reject_secret_fields(snapshot)
         return snapshot
 
@@ -116,6 +138,32 @@ class OkxSdkReconciliationApi:
         limit: str = "",
     ) -> dict[str, Any]:
         return self.trade_api.get_fills_history(instType=inst_type, limit=limit)
+
+    def order_algos_list(
+        self,
+        ord_type: str = "",
+        inst_type: str = "",
+        limit: str = "",
+    ) -> dict[str, Any]:
+        return self.trade_api.order_algos_list(
+            ordType=ord_type,
+            instType=inst_type,
+            limit=limit,
+        )
+
+    def order_algos_history(
+        self,
+        ord_type: str,
+        state: str = "",
+        inst_type: str = "",
+        limit: str = "",
+    ) -> dict[str, Any]:
+        return self.trade_api.order_algos_history(
+            ordType=ord_type,
+            state=state,
+            instType=inst_type,
+            limit=limit,
+        )
 
 
 def _build_mainnet_reconciliation_api(
@@ -199,11 +247,16 @@ def _sanitize_orders(items: list[dict[str, Any]]) -> list[dict[str, str | bool]]
     orders: list[dict[str, str | bool]] = []
     for item in items:
         inst_id = _text(item.get("instId"))
+        close_source = _infer_close_source(item)
         orders.append(
             _compact(
                 {
+                    "actualSide": _text(item.get("actualSide")),
+                    "algoClientOrderId": _text(item.get("algoClOrdId")),
+                    "algoOrderId": _text(item.get("algoId")),
                     "averageFillPrice": _text(item.get("avgPx")),
                     "clientOrderId": _text(item.get("clOrdId")),
+                    "closeSource": close_source,
                     "filledQuantity": _text(item.get("accFillSz")),
                     "instrumentId": inst_id,
                     "orderType": _text(item.get("ordType")),
@@ -230,14 +283,61 @@ def _sanitize_orders(items: list[dict[str, Any]]) -> list[dict[str, str | bool]]
     return orders
 
 
-def _sanitize_fills(items: list[dict[str, Any]]) -> list[dict[str, str | bool]]:
+def _sanitize_algo_orders(items: list[dict[str, Any]]) -> list[dict[str, str | bool]]:
+    orders: list[dict[str, str | bool]] = []
+    for item in items:
+        inst_id = _text(item.get("instId"))
+        orders.append(
+            _compact(
+                {
+                    "actualSide": _text(item.get("actualSide")),
+                    "algoClientOrderId": _text(item.get("algoClOrdId")),
+                    "algoOrderId": _text(item.get("algoId")),
+                    "closeSource": _infer_close_source(item),
+                    "instrumentId": inst_id,
+                    "linkedClientOrderId": _text(item.get("clOrdId")),
+                    "linkedOrderId": _text(item.get("ordId")),
+                    "orderPrice": _text(item.get("orderPx") or item.get("ordPx")),
+                    "orderType": _text(item.get("ordType")),
+                    "positionSide": _text(item.get("posSide")),
+                    "side": _text(item.get("side")),
+                    "state": _text(item.get("state")),
+                    "stopLossOrderPrice": _text(item.get("slOrdPx")),
+                    "stopLossTriggerPrice": _text(item.get("slTriggerPx")),
+                    "symbol": _plain_swap_symbol(inst_id),
+                    "takeProfitOrderPrice": _text(item.get("tpOrdPx")),
+                    "takeProfitTriggerPrice": _text(item.get("tpTriggerPx")),
+                    "triggerPrice": _text(item.get("triggerPx")),
+                }
+            )
+        )
+    orders.sort(
+        key=lambda item: (
+            str(item.get("instrumentId", "")),
+            str(item.get("algoOrderId", "")),
+            str(item.get("linkedOrderId", "")),
+        )
+    )
+    reject_secret_fields(orders)
+    return orders
+
+
+def _sanitize_fills(
+    items: list[dict[str, Any]],
+    *,
+    close_sources: dict[str, str],
+) -> list[dict[str, str | bool]]:
     fills: list[dict[str, str | bool]] = []
     for item in items:
         inst_id = _text(item.get("instId"))
+        close_source = _fill_close_source(item, close_sources=close_sources)
         fills.append(
             _compact(
                 {
+                    "actualSide": _text(item.get("actualSide")),
                     "clientOrderId": _text(item.get("clOrdId")),
+                    "closeSource": close_source,
+                    "execType": _text(item.get("execType")),
                     "feeAmount": _text(item.get("fee")),
                     "feeCurrency": _text(item.get("feeCcy")),
                     "fillId": _text(item.get("billId") or item.get("tradeId")),
@@ -248,6 +348,9 @@ def _sanitize_fills(items: list[dict[str, Any]]) -> list[dict[str, str | bool]]:
                     "orderType": _text(item.get("ordType")),
                     "positionSide": _text(item.get("posSide")),
                     "providerOrderId": _text(item.get("ordId")),
+                    "realizedPnl": _text(
+                        item.get("fillPnl") or item.get("pnl") or item.get("realizedPnl")
+                    ),
                     "side": _text(item.get("side")),
                     "symbol": _plain_swap_symbol(inst_id),
                 }
@@ -262,6 +365,102 @@ def _sanitize_fills(items: list[dict[str, Any]]) -> list[dict[str, str | bool]]:
     )
     reject_secret_fields(fills)
     return fills
+
+
+def _capture_algo_orders(
+    api: OkxReconciliationApi,
+    *,
+    warnings: list[str],
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for ord_type in OKX_RECONCILIATION_ALGO_ORDER_TYPES:
+        items.extend(
+            _optional_okx_response_data(
+                api.order_algos_list,
+                f"algo_orders_pending_{ord_type}",
+                warnings=warnings,
+                ord_type=ord_type,
+                inst_type="SWAP",
+                limit="100",
+            )
+        )
+        items.extend(
+            _optional_okx_response_data(
+                api.order_algos_history,
+                f"algo_orders_history_{ord_type}",
+                warnings=warnings,
+                ord_type=ord_type,
+                inst_type="SWAP",
+                limit="100",
+            )
+        )
+    return items
+
+
+def _optional_okx_response_data(
+    request: Any,
+    endpoint: str,
+    *,
+    warnings: list[str],
+    **kwargs: str,
+) -> list[dict[str, Any]]:
+    try:
+        return _okx_response_data(request(**kwargs), endpoint)
+    except Exception:
+        warnings.append(f"{endpoint}_unavailable")
+        return []
+
+
+def _close_sources_by_order_ref(items: tuple[dict[str, Any], ...]) -> dict[str, str]:
+    sources: dict[str, str] = {}
+    for item in items:
+        close_source = _infer_close_source(item)
+        if not close_source:
+            continue
+        for key in ("ordId", "algoId", "clOrdId", "algoClOrdId"):
+            value = _text(item.get(key))
+            if value:
+                sources[value] = close_source
+    return sources
+
+
+def _fill_close_source(item: dict[str, Any], *, close_sources: dict[str, str]) -> str:
+    explicit = _infer_close_source(item)
+    if explicit:
+        return explicit
+    for key in ("ordId", "clOrdId", "algoId", "algoClOrdId"):
+        value = _text(item.get(key))
+        if value in close_sources:
+            return close_sources[value]
+    return ""
+
+
+def _infer_close_source(item: dict[str, Any]) -> str:
+    for key in ("closeSource", "actualSide", "orderRole", "triggerSource"):
+        value = _normalized_token(item.get(key))
+        if value in {"tp", "takeprofit", "take_profit"}:
+            return "take_profit"
+        if value in {"sl", "stoploss", "stop_loss"}:
+            return "stop_loss"
+        if value in {"manual", "provider_manual", "external_manual"}:
+            return "provider_manual"
+
+    order_type = _normalized_token(item.get("ordType"))
+    if order_type in {"takeprofit", "take_profit", "tp"}:
+        return "take_profit"
+    if order_type in {"stoploss", "stop_loss", "sl"}:
+        return "stop_loss"
+
+    reduce_only = _bool_text(item.get("reduceOnly"))
+    client_order_id = _text(item.get("clOrdId"))
+    if reduce_only is True and not client_order_id.startswith(YTM_OKX_CLIENT_ORDER_PREFIX):
+        return "provider_manual"
+    return ""
+
+
+def _normalized_token(value: object) -> str:
+    text = _text(value).lower().replace("-", "_").replace(" ", "_")
+    return "".join(ch for ch in text if ch.isalnum() or ch == "_")
 
 
 def _plain_swap_symbol(inst_id: str) -> str:
