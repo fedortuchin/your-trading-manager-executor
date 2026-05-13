@@ -34,7 +34,7 @@ Heartbeat may report non-secret local credential metadata:
 
 ```json
 {
-  "clientVersion": "0.7.6",
+  "clientVersion": "0.7.7",
   "heartbeatStatus": "online",
   "capabilities": {
     "leases": true,
