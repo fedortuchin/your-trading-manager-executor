@@ -13,6 +13,7 @@ from ytm_executor.okx_swap import (
     OkxSwapMainnetOrderPrecheckAdapter,
     okx_swap_instrument_rules,
     okx_swap_order_precheck_params,
+    okx_swap_set_leverage_params,
 )
 
 
@@ -93,6 +94,21 @@ def test_okx_swap_converts_notional_to_contract_quantity() -> None:
     assert params["sz"] == "12"
 
 
+def test_okx_swap_set_leverage_params_rounds_up_to_integer() -> None:
+    rules = okx_swap_instrument_rules(_instruments(), "BTC-USDT-SWAP")
+
+    params = okx_swap_set_leverage_params(
+        _request(leverage=Decimal("4.2")),
+        rules=rules,
+    )
+
+    assert params == {
+        "instId": "BTC-USDT-SWAP",
+        "lever": "5",
+        "mgnMode": "cross",
+    }
+
+
 def test_okx_swap_real_open_requires_stop_loss() -> None:
     rules = okx_swap_instrument_rules(_instruments(), "BTC-USDT-SWAP")
 
@@ -125,6 +141,7 @@ def test_okx_swap_adapter_calls_order_precheck_not_place_order() -> None:
 
     result = adapter.prepare_order(_request())
 
+    assert api.set_leverage_calls == []
     assert len(api.precheck_calls) == 1
     assert api.precheck_calls[0]["endpoint"] == OKX_ORDER_PRECHECK_PATH
     assert api.place_order_calls == []
@@ -169,6 +186,9 @@ def test_okx_swap_placement_adapter_prechecks_then_places_order() -> None:
 
     result = adapter.prepare_order(_request())
 
+    assert api.set_leverage_calls == [
+        {"params": {"instId": "BTC-USDT-SWAP", "lever": "1", "mgnMode": "cross"}}
+    ]
     assert len(api.precheck_calls) == 1
     assert len(api.place_order_calls) == 1
     assert api.place_order_calls[0]["params"] == api.precheck_calls[0]["params"]
@@ -176,6 +196,7 @@ def test_okx_swap_placement_adapter_prechecks_then_places_order() -> None:
         "adapter": OKX_SWAP_MAINNET_ORDER_ADAPTER,
         "clientOrderId": api.place_order_calls[0]["params"]["clOrdId"],
         "executorAction": "order_submitted",
+        "leverage": {"instId": "BTC-USDT-SWAP", "lever": "1", "mgnMode": "cross"},
         "mainnet": True,
         "market": "okx_swap",
         "normalizedOrder": {
@@ -293,6 +314,7 @@ class FakeOkxSwapApi:
         positions: tuple[dict[str, object], ...] = (),
     ) -> None:
         self.precheck_calls: list[dict[str, object]] = []
+        self.set_leverage_calls: list[dict[str, object]] = []
         self.place_algo_order_calls: list[dict[str, object]] = []
         self.place_order_calls: list[dict[str, object]] = []
         self.pending_algos = pending_algos
@@ -348,6 +370,10 @@ class FakeOkxSwapApi:
         assert inst_id == "BTC-USDT-SWAP"
         return {"code": "0", "data": list(self.positions), "msg": ""}
 
+    def set_leverage(self, params: dict[str, object]) -> dict[str, object]:
+        self.set_leverage_calls.append({"params": params})
+        return {"code": "0", "data": [{"lever": params["lever"], "mgnMode": params["mgnMode"]}]}
+
     def place_algo_order(self, params: dict[str, object]) -> dict[str, object]:
         self.place_algo_order_calls.append({"params": params})
         return self.place_algo_order_response
@@ -363,6 +389,7 @@ def _request(
     price_reference: Decimal | None = None,
     order_type: str = "limit",
     stop_loss: Decimal | None = Decimal("95"),
+    leverage: Decimal | None = Decimal("1"),
 ) -> BrokerOrderRequest:
     return BrokerOrderRequest(
         provider="okx",
@@ -381,7 +408,7 @@ def _request(
         time_in_force=None,
         market="okx_swap",
         margin_mode="cross",
-        leverage=Decimal("1"),
+        leverage=leverage,
     )
 
 

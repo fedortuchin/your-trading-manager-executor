@@ -18,6 +18,7 @@ OKX_ORDER_PRECHECK_PATH = "/api/v5/trade/order-precheck"
 class OkxSwapApi(Protocol):
     def get_instruments(self, *, inst_type: str, inst_id: str) -> dict[str, Any]: ...
     def get_positions(self, *, inst_type: str, inst_id: str) -> dict[str, Any]: ...
+    def set_leverage(self, params: dict[str, Any]) -> dict[str, Any]: ...
     def order_precheck(self, params: dict[str, Any]) -> dict[str, Any]: ...
     def place_order(self, params: dict[str, Any]) -> dict[str, Any]: ...
     def order_algos_pending(self, *, inst_type: str, inst_id: str) -> dict[str, Any]: ...
@@ -108,6 +109,9 @@ class OkxSwapMainnetOrderPlacementAdapter:
             ),
             inst_id,
         )
+        leverage_params = okx_swap_set_leverage_params(request, rules=rules)
+        if leverage_params is not None:
+            _okx_response_data(api.set_leverage(leverage_params), "set_leverage")
         params = okx_swap_order_params(request, rules=rules)
         _okx_response_data(api.order_precheck(params), "order_precheck")
         response = _single_order_response(
@@ -131,6 +135,7 @@ class OkxSwapMainnetOrderPlacementAdapter:
             "executorAction": "order_submitted",
             "mainnet": True,
             "market": "okx_swap",
+            "leverage": leverage_params,
             "normalizedOrder": _public_normalized_order(params),
             "precheck": "passed",
             "protection": protection,
@@ -159,6 +164,9 @@ class OkxSdkSwapApi:
 
     def get_positions(self, *, inst_type: str, inst_id: str) -> dict[str, Any]:
         return self.account_api.get_positions(instType=inst_type, instId=inst_id)
+
+    def set_leverage(self, params: dict[str, Any]) -> dict[str, Any]:
+        return self.account_api.set_leverage(**params)
 
     def order_precheck(self, params: dict[str, Any]) -> dict[str, Any]:
         return self.trade_api._request_with_params("POST", OKX_ORDER_PRECHECK_PATH, params)
@@ -213,6 +221,20 @@ def okx_swap_order_params(
             params["attachAlgoOrds"] = [_okx_attached_stop_loss(request, rules=rules)]
     reject_secret_fields(params)
     return params
+
+
+def okx_swap_set_leverage_params(
+    request: BrokerOrderRequest,
+    *,
+    rules: OkxSwapInstrumentRules,
+) -> dict[str, str] | None:
+    if request.leverage is None:
+        return None
+    return {
+        "instId": rules.inst_id,
+        "lever": _integer_leverage_text(request.leverage),
+        "mgnMode": _okx_td_mode(request.margin_mode),
+    }
 
 
 def okx_swap_instrument_rules(
@@ -732,6 +754,11 @@ def _round_to_tick(value: Decimal, *, tick_size: Decimal, side: str) -> Decimal:
 
 def _decimal_text(value: Decimal) -> str:
     return format(value.normalize(), "f")
+
+
+def _integer_leverage_text(value: Decimal) -> str:
+    leverage = max(Decimal("1"), value.to_integral_value(rounding=ROUND_CEILING))
+    return format(leverage, "f")
 
 
 def _required_text(value: object, field_name: str) -> str:

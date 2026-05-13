@@ -199,6 +199,22 @@ def test_risk_rejects_futures_reduce_only_disabled_for_close() -> None:
     assert decision.reason_code == "risk_futures_reduce_only_required"
 
 
+def test_risk_rounds_command_leverage_up_before_limit_check() -> None:
+    command = _command()
+    command["commandPayload"]["leverage"] = "1.1"
+
+    decision = evaluate_command_risk(
+        command,
+        execution_mode="real",
+        policy=_policy(paper_only=False),
+        state=RiskState(realized_loss_by_date={}),
+        now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
+    )
+
+    assert decision.passed is False
+    assert decision.reason_code == "risk_leverage_exceeded"
+
+
 def _policy(
     *,
     paper_only: bool = True,

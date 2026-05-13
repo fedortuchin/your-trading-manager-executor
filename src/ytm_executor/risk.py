@@ -7,7 +7,7 @@ import os
 import stat
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_CEILING, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -288,6 +288,7 @@ def evaluate_command_risk(
     )
     if leverage is None:
         leverage = Decimal("1")
+    leverage = _command_leverage(leverage)
     if leverage > policy.max_leverage:
         return _block("risk_leverage_exceeded", "command leverage exceeds local limit")
 
@@ -544,6 +545,10 @@ def _non_negative_decimal(value: object, field_name: str) -> Decimal:
     if decimal < 0:
         raise ValueError(f"{field_name} must be non-negative")
     return decimal
+
+
+def _command_leverage(value: Decimal) -> Decimal:
+    return max(Decimal("1"), value.to_integral_value(rounding=ROUND_CEILING))
 
 
 def _decimal(value: object, field_name: str) -> Decimal:

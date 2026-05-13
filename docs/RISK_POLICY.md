@@ -94,6 +94,10 @@ command symbol from YTM. The OKX adapter maps plain USDT pairs like `BTCUSDT` to
 contract size; otherwise the adapter can derive contract size from `orderNotional` plus
 `priceReference`:
 
+For futures commands, `leverage` is treated as an integer execution setting. The local risk gate
+rounds command leverage up before comparing it with `maxLeverage`; the OKX real adapter sends the
+same rounded value as `lever` to `account/set-leverage` before `order-precheck` and `trade/order`.
+
 ```bash
 ytm-executor risk init --kill-switch-off \
   --allow-market okx_swap \
