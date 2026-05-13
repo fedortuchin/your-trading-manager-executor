@@ -34,7 +34,7 @@ Heartbeat may report non-secret local credential metadata:
 
 ```json
 {
-  "clientVersion": "0.7.8",
+  "clientVersion": "0.7.11",
   "heartbeatStatus": "online",
   "capabilities": {
     "leases": true,
@@ -117,10 +117,14 @@ order, verifies integer leverage with `POST /api/v5/account/set-leverage`, calls
 `order-precheck` when the account mode supports that endpoint, looks up an existing order by
 deterministic `clOrdId`, and only then calls
 `POST /api/v5/trade/order`. Attached TP/SL uses market close prices (`tpOrdPx=-1`, `slOrdPx=-1`)
-and `last` trigger type by default. After submit, the executor verifies a matching pending OKX TP/SL
-algo order. If no matching algo exists and no position is open yet, it reports
-`protectionStatus=pending_activation`; if protection is missing while a position is open, it reports
-`protectionStatus=unprotected`. The sanitized result uses
+and `last` trigger type by default. OKX `GET /api/v5/trade/orders-algo-pending` requires an
+`ordType`, so post-submit protection verification queries the documented algo order types
+explicitly and matches `algoClOrdId`/`ordId` against the attached TP/SL. If no matching algo exists
+and no position is open yet, it reports `protectionStatus=pending_activation`; if protection is
+missing while a position is open, it reports `protectionStatus=unprotected`. If the entry order was
+accepted but post-submit protection verification itself fails, the executor still returns
+`executorAction=order_submitted` with `protectionStatus=verification_failed` so YTM does not mark an
+already accepted provider order as a rejected command. The sanitized result uses
 `executorAction=order_submitted` and includes `providerOrderId`; broker secrets and raw
 authorization data are never uploaded to YTM.
 

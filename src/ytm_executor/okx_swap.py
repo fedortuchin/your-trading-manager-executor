@@ -13,6 +13,7 @@ from ytm_executor.guards import reject_secret_fields
 OKX_SWAP_MAINNET_ORDER_PRECHECK_ADAPTER = "okx_swap_mainnet_order_precheck"
 OKX_SWAP_MAINNET_ORDER_ADAPTER = "okx_swap_mainnet_order"
 OKX_ORDER_PRECHECK_PATH = "/api/v5/trade/order-precheck"
+OKX_ALGO_ORDER_TYPES = ("conditional", "oco", "trigger", "move_order_stop")
 
 
 class OkxSwapApi(Protocol):
@@ -23,7 +24,13 @@ class OkxSwapApi(Protocol):
     def get_order(self, *, inst_id: str, cl_ord_id: str) -> dict[str, Any]: ...
     def order_precheck(self, params: dict[str, Any]) -> dict[str, Any]: ...
     def place_order(self, params: dict[str, Any]) -> dict[str, Any]: ...
-    def order_algos_pending(self, *, inst_type: str, inst_id: str) -> dict[str, Any]: ...
+    def order_algos_pending(
+        self,
+        *,
+        inst_type: str,
+        inst_id: str,
+        ord_type: str,
+    ) -> dict[str, Any]: ...
     def place_algo_order(self, params: dict[str, Any]) -> dict[str, Any]: ...
 
 
@@ -145,7 +152,7 @@ class OkxSwapMainnetOrderPlacementAdapter:
         provider_order_id = _optional_text(response.get("ordId"))
         if provider_order_id is None:
             raise ValueError("OKX place_order response missing ordId")
-        protection = _verify_or_remediate_protection(
+        protection = _safe_verify_or_remediate_protection(
             api=api,
             request=request,
             order_params=params,
@@ -206,8 +213,18 @@ class OkxSdkSwapApi:
     def place_order(self, params: dict[str, Any]) -> dict[str, Any]:
         return self.trade_api.place_order(**params)
 
-    def order_algos_pending(self, *, inst_type: str, inst_id: str) -> dict[str, Any]:
-        return self.trade_api.order_algos_list(instType=inst_type, instId=inst_id)
+    def order_algos_pending(
+        self,
+        *,
+        inst_type: str,
+        inst_id: str,
+        ord_type: str,
+    ) -> dict[str, Any]:
+        return self.trade_api.order_algos_list(
+            instType=inst_type,
+            instId=inst_id,
+            ordType=ord_type,
+        )
 
     def place_algo_order(self, params: dict[str, Any]) -> dict[str, Any]:
         return self.trade_api.place_algo_order(**params)
@@ -473,11 +490,9 @@ def _verify_or_remediate_protection(
                 ),
             )
 
-    pending_match = _matching_pending_protection(
-        _okx_response_data(
-            api.order_algos_pending(inst_type="SWAP", inst_id=rules.inst_id),
-            "order_algos_pending",
-        ),
+    pending_match = _matching_pending_protection_from_api(
+        api=api,
+        rules=rules,
         expected=expected,
         provider_order_id=provider_order_id,
     )
@@ -531,6 +546,61 @@ def _verify_or_remediate_protection(
     )
 
 
+def _safe_verify_or_remediate_protection(
+    *,
+    api: OkxSwapApi,
+    request: BrokerOrderRequest,
+    order_params: dict[str, Any],
+    order_response: dict[str, Any],
+    provider_order_id: str,
+    rules: OkxSwapInstrumentRules,
+) -> dict[str, Any]:
+    try:
+        return _verify_or_remediate_protection(
+            api=api,
+            request=request,
+            order_params=order_params,
+            order_response=order_response,
+            provider_order_id=provider_order_id,
+            rules=rules,
+        )
+    except ValueError as exc:
+        expected = _expected_protection(order_params)
+        return {
+            "actionRequired": "verify_provider_position_and_protection",
+            "reason": str(exc),
+            "reasonCode": "protection_verification_failed",
+            **_expected_protection_public(expected),
+            "status": "verification_failed",
+            "verification": "post_placement_verification_failed",
+        }
+
+
+def _matching_pending_protection_from_api(
+    *,
+    api: OkxSwapApi,
+    rules: OkxSwapInstrumentRules,
+    expected: dict[str, str],
+    provider_order_id: str,
+) -> dict[str, Any] | None:
+    for order_type in OKX_ALGO_ORDER_TYPES:
+        match = _matching_pending_protection(
+            _okx_response_data(
+                api.order_algos_pending(
+                    inst_type="SWAP",
+                    inst_id=rules.inst_id,
+                    ord_type=order_type,
+                ),
+                f"order_algos_pending_{order_type}",
+            ),
+            expected=expected,
+            provider_order_id=provider_order_id,
+        )
+        if match is not None:
+            return match
+    return None
+
+
 def _expected_protection(order_params: dict[str, Any]) -> dict[str, str] | None:
     attach_algo_orders = order_params.get("attachAlgoOrds")
     if not isinstance(attach_algo_orders, list):
@@ -551,6 +621,18 @@ def _expected_protection(order_params: dict[str, Any]) -> dict[str, str] | None:
             **_expected_take_profit(item),
         }
     return None
+
+
+def _expected_protection_public(expected: dict[str, str] | None) -> dict[str, str]:
+    if expected is None:
+        return {}
+    return {
+        "algoClientOrderId": expected["attachAlgoClOrdId"],
+        "slOrdPx": expected["slOrdPx"],
+        "slTriggerPx": expected["slTriggerPx"],
+        "slTriggerPxType": expected["slTriggerPxType"],
+        **_expected_take_profit_public(expected),
+    }
 
 
 def _expected_take_profit(item: dict[str, Any]) -> dict[str, str]:

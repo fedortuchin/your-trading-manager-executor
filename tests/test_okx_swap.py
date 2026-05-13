@@ -331,6 +331,50 @@ def test_okx_swap_placement_recovers_existing_order_by_client_id() -> None:
     assert result.payload["providerOrderId"] == "okx-existing-1"
 
 
+def test_okx_swap_placement_queries_pending_algos_with_required_order_types() -> None:
+    api = FakeOkxSwapApi()
+    adapter = OkxSwapMainnetOrderPlacementAdapter(
+        api_key="public",
+        api_secret="private",
+        passphrase="passphrase",
+        api=api,
+    )
+
+    result = adapter.prepare_order(_request())
+
+    assert result.payload["protectionStatus"] == "protected"
+    assert api.pending_algo_calls == [
+        {"instId": "BTC-USDT-SWAP", "instType": "SWAP", "ordType": "conditional"}
+    ]
+
+
+def test_okx_swap_placement_acknowledges_order_when_protection_verification_fails() -> None:
+    api = FakeOkxSwapApi(
+        pending_algos_response={
+            "code": "51000",
+            "data": [],
+            "msg": "Parameter ordType error",
+        },
+    )
+    adapter = OkxSwapMainnetOrderPlacementAdapter(
+        api_key="public",
+        api_secret="private",
+        passphrase="passphrase",
+        api=api,
+    )
+
+    result = adapter.prepare_order(_request())
+
+    assert api.place_order_calls
+    assert result.status == "acknowledged"
+    assert result.payload["executorAction"] == "order_submitted"
+    assert result.payload["providerOrderId"] == "okx-order-1"
+    assert result.payload["protectionStatus"] == "verification_failed"
+    assert result.payload["protection"]["actionRequired"] == (
+        "verify_provider_position_and_protection"
+    )
+
+
 def test_okx_swap_placement_remediates_missing_attached_stop_loss() -> None:
     api = FakeOkxSwapApi(pending_algos=(), positions=({"instId": "BTC-USDT-SWAP", "pos": "1.2"},))
     adapter = OkxSwapMainnetOrderPlacementAdapter(
@@ -388,6 +432,7 @@ class FakeOkxSwapApi:
         self,
         *,
         pending_algos: tuple[dict[str, object], ...] | None = None,
+        pending_algos_response: dict[str, object] | None = None,
         place_algo_order_response: dict[str, object] | None = None,
         place_order_response: dict[str, object] | None = None,
         set_leverage_response: dict[str, object] | None = None,
@@ -399,7 +444,9 @@ class FakeOkxSwapApi:
         self.set_leverage_calls: list[dict[str, object]] = []
         self.place_algo_order_calls: list[dict[str, object]] = []
         self.place_order_calls: list[dict[str, object]] = []
+        self.pending_algo_calls: list[dict[str, object]] = []
         self.pending_algos = pending_algos
+        self.pending_algos_response = pending_algos_response
         self.place_algo_order_response = place_algo_order_response or {
             "code": "0",
             "data": [{"algoId": "algo-remediated-1", "sCode": "0"}],
@@ -438,11 +485,24 @@ class FakeOkxSwapApi:
             return {"code": "0", "data": [self.existing_order], "msg": ""}
         return {"code": "51603", "data": [], "msg": "order does not exist"}
 
-    def order_algos_pending(self, *, inst_type: str, inst_id: str) -> dict[str, object]:
+    def order_algos_pending(
+        self,
+        *,
+        inst_type: str,
+        inst_id: str,
+        ord_type: str,
+    ) -> dict[str, object]:
         assert inst_type == "SWAP"
         assert inst_id == "BTC-USDT-SWAP"
+        self.pending_algo_calls.append(
+            {"instId": inst_id, "instType": inst_type, "ordType": ord_type}
+        )
+        if self.pending_algos_response is not None:
+            return self.pending_algos_response
         if self.pending_algos is not None:
             return {"code": "0", "data": list(self.pending_algos), "msg": ""}
+        if ord_type != "conditional":
+            return {"code": "0", "data": [], "msg": ""}
         params = (
             self.place_order_calls[0]["params"]
             if self.place_order_calls

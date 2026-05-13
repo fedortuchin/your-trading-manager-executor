@@ -147,7 +147,7 @@ class FakeOkxSwapApi:
     def place_order(self, **kwargs):
         raise AssertionError("place_order must not be called")
 
-    def order_algos_pending(self, *, inst_type: str, inst_id: str):
+    def order_algos_pending(self, *, inst_type: str, inst_id: str, ord_type: str):
         raise AssertionError("algo orders must not be queried for validate-only precheck")
 
     def place_algo_order(self, params: dict[str, object]):
