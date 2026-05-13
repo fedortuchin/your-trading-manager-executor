@@ -16,9 +16,11 @@ OKX_ORDER_PRECHECK_PATH = "/api/v5/trade/order-precheck"
 
 
 class OkxSwapApi(Protocol):
+    def get_account_config(self) -> dict[str, Any]: ...
     def get_instruments(self, *, inst_type: str, inst_id: str) -> dict[str, Any]: ...
     def get_positions(self, *, inst_type: str, inst_id: str) -> dict[str, Any]: ...
     def set_leverage(self, params: dict[str, Any]) -> dict[str, Any]: ...
+    def get_order(self, *, inst_id: str, cl_ord_id: str) -> dict[str, Any]: ...
     def order_precheck(self, params: dict[str, Any]) -> dict[str, Any]: ...
     def place_order(self, params: dict[str, Any]) -> dict[str, Any]: ...
     def order_algos_pending(self, *, inst_type: str, inst_id: str) -> dict[str, Any]: ...
@@ -58,6 +60,9 @@ class OkxSwapMainnetOrderPrecheckAdapter:
             passphrase=self.passphrase,
         )
         inst_id = okx_swap_instrument_id(request.symbol)
+        account_config = _validated_account_config(
+            _okx_response_data(api.get_account_config(), "get_account_config"),
+        )
         rules = okx_swap_instrument_rules(
             _okx_response_data(
                 api.get_instruments(inst_type="SWAP", inst_id=inst_id),
@@ -69,6 +74,7 @@ class OkxSwapMainnetOrderPrecheckAdapter:
         _okx_response_data(api.order_precheck(params), "order_precheck")
         payload = {
             "adapter": OKX_SWAP_MAINNET_ORDER_PRECHECK_ADAPTER,
+            "accountConfig": account_config,
             "clientOrderId": params["clOrdId"],
             "executorAction": "order_precheck_validated",
             "mainnet": True,
@@ -102,6 +108,9 @@ class OkxSwapMainnetOrderPlacementAdapter:
             passphrase=self.passphrase,
         )
         inst_id = okx_swap_instrument_id(request.symbol)
+        account_config = _validated_account_config(
+            _okx_response_data(api.get_account_config(), "get_account_config"),
+        )
         rules = okx_swap_instrument_rules(
             _okx_response_data(
                 api.get_instruments(inst_type="SWAP", inst_id=inst_id),
@@ -110,18 +119,28 @@ class OkxSwapMainnetOrderPlacementAdapter:
             inst_id,
         )
         leverage_params = okx_swap_set_leverage_params(request, rules=rules)
+        leverage_result: dict[str, Any] | None = None
         if leverage_params is not None:
-            _okx_response_data(api.set_leverage(leverage_params), "set_leverage")
+            leverage_result = _verified_set_leverage_payload(
+                _okx_response_data(api.set_leverage(leverage_params), "set_leverage"),
+                expected=leverage_params,
+            )
         params = okx_swap_order_params(request, rules=rules)
         _okx_response_data(api.order_precheck(params), "order_precheck")
-        response = _single_order_response(
-            _okx_response_data(api.place_order(params), "place_order"),
-            "place_order",
+        existing_order = _lookup_order_by_client_id(api=api, params=params)
+        recovered = existing_order is not None
+        response = (
+            existing_order
+            if existing_order is not None
+            else _single_order_response(
+                _okx_response_data(api.place_order(params), "place_order"),
+                "place_order",
+            )
         )
         provider_order_id = _optional_text(response.get("ordId"))
         if provider_order_id is None:
             raise ValueError("OKX place_order response missing ordId")
-        protection = _verify_or_remediate_stop_loss(
+        protection = _verify_or_remediate_protection(
             api=api,
             request=request,
             order_params=params,
@@ -131,11 +150,13 @@ class OkxSwapMainnetOrderPlacementAdapter:
         )
         payload = {
             "adapter": OKX_SWAP_MAINNET_ORDER_ADAPTER,
+            "accountConfig": account_config,
             "clientOrderId": params["clOrdId"],
             "executorAction": "order_submitted",
+            "idempotencyRecovery": recovered,
             "mainnet": True,
             "market": "okx_swap",
-            "leverage": leverage_params,
+            "leverage": leverage_result,
             "normalizedOrder": _public_normalized_order(params),
             "precheck": "passed",
             "protection": protection,
@@ -159,6 +180,9 @@ class OkxSdkSwapApi:
     account_api: Any
     trade_api: Any
 
+    def get_account_config(self) -> dict[str, Any]:
+        return self.account_api.get_account_config()
+
     def get_instruments(self, *, inst_type: str, inst_id: str) -> dict[str, Any]:
         return self.account_api.get_instruments(instType=inst_type, instId=inst_id)
 
@@ -167,6 +191,9 @@ class OkxSdkSwapApi:
 
     def set_leverage(self, params: dict[str, Any]) -> dict[str, Any]:
         return self.account_api.set_leverage(**params)
+
+    def get_order(self, *, inst_id: str, cl_ord_id: str) -> dict[str, Any]:
+        return self.trade_api.get_order(instId=inst_id, clOrdId=cl_ord_id)
 
     def order_precheck(self, params: dict[str, Any]) -> dict[str, Any]:
         return self.trade_api._request_with_params("POST", OKX_ORDER_PRECHECK_PATH, params)
@@ -194,8 +221,8 @@ def okx_swap_order_params(
     *,
     rules: OkxSwapInstrumentRules,
 ) -> dict[str, Any]:
-    order_type = _okx_order_type(request.order_type)
     side = _okx_side(request)
+    order_type = _effective_okx_order_type(request, side=side)
     size = _normalized_size(request, rules=rules)
     params: dict[str, Any] = {
         "clOrdId": _okx_client_order_id(request.client_order_id),
@@ -208,17 +235,22 @@ def okx_swap_order_params(
     }
     if request.position_effect in {"reduce", "close"}:
         params["reduceOnly"] = "true"
-    if order_type == "limit":
-        if request.limit_price is None:
+    if order_type in {"limit", "ioc"}:
+        price = request.limit_price
+        if order_type == "ioc" and request.order_type == "market":
+            price = _bounded_market_limit_price(request, side=side)
+        if price is None:
             raise ValueError("OKX SWAP limit orders require price")
         params["px"] = _decimal_text(
-            _normalized_price(request.limit_price, side=side, rules=rules)
+            _normalized_price(price, side=side, rules=rules)
         )
     if request.position_effect == "open":
         if request.execution_mode == "real" and request.stop_loss is None:
             raise ValueError("OKX real open orders require exchange-side stopLoss")
+        if request.execution_mode == "real" and not request.take_profit_targets:
+            raise ValueError("OKX real open orders require exchange-side takeProfit")
         if request.stop_loss is not None:
-            params["attachAlgoOrds"] = [_okx_attached_stop_loss(request, rules=rules)]
+            params["attachAlgoOrds"] = [_okx_attached_tp_sl(request, rules=rules)]
     reject_secret_fields(params)
     return params
 
@@ -306,7 +338,77 @@ def _single_order_response(items: list[dict[str, Any]], endpoint: str) -> dict[s
     return response
 
 
-def _verify_or_remediate_stop_loss(
+def _validated_account_config(items: list[dict[str, Any]]) -> dict[str, str]:
+    if not items:
+        raise ValueError("OKX account config response data is empty")
+    config = items[0]
+    account_level = _optional_text(config.get("acctLv"))
+    position_mode = _optional_text(config.get("posMode"))
+    if account_level not in {"2", "3"}:
+        raise ValueError("OKX account mode must be Futures or Multi-currency margin")
+    if position_mode != "net_mode":
+        raise ValueError("OKX position mode must be net_mode")
+    payload = {
+        "acctLv": account_level,
+        "posMode": position_mode,
+    }
+    reject_secret_fields(payload)
+    return payload
+
+
+def _verified_set_leverage_payload(
+    items: list[dict[str, Any]],
+    *,
+    expected: dict[str, str],
+) -> dict[str, str]:
+    if not items:
+        raise ValueError("OKX set_leverage response data is empty")
+    for item in items:
+        lever = _optional_text(item.get("lever"))
+        margin_mode = _optional_text(item.get("mgnMode"))
+        inst_id = _optional_text(item.get("instId"))
+        if lever != expected["lever"] or margin_mode != expected["mgnMode"]:
+            continue
+        if inst_id not in {None, expected["instId"]}:
+            continue
+        payload = {
+            "instId": inst_id or expected["instId"],
+            "lever": lever,
+            "mgnMode": margin_mode,
+            "verified": "true",
+        }
+        pos_side = _optional_text(item.get("posSide"))
+        if pos_side:
+            payload["posSide"] = pos_side
+        reject_secret_fields(payload)
+        return payload
+    raise ValueError("OKX set_leverage response does not match requested leverage")
+
+
+def _lookup_order_by_client_id(
+    *,
+    api: OkxSwapApi,
+    params: dict[str, Any],
+) -> dict[str, Any] | None:
+    inst_id = str(params["instId"])
+    client_order_id = str(params["clOrdId"])
+    try:
+        items = _okx_response_data(
+            api.get_order(inst_id=inst_id, cl_ord_id=client_order_id),
+            "get_order",
+        )
+    except ValueError:
+        return None
+    if not items:
+        return None
+    response = dict(items[0])
+    if _optional_text(response.get("ordId")) is None:
+        return None
+    reject_secret_fields(response)
+    return response
+
+
+def _verify_or_remediate_protection(
     *,
     api: OkxSwapApi,
     request: BrokerOrderRequest,
@@ -315,14 +417,14 @@ def _verify_or_remediate_stop_loss(
     provider_order_id: str,
     rules: OkxSwapInstrumentRules,
 ) -> dict[str, Any]:
-    expected = _expected_stop_loss(order_params)
+    expected = _expected_protection(order_params)
     if expected is None:
         return {
-            "reasonCode": "stop_loss_not_required",
+            "reasonCode": "protection_not_required",
             "status": "not_required",
         }
 
-    attach_response = _attached_stop_loss_response(
+    attach_response = _attached_protection_response(
         order_response.get("attachAlgoOrds"),
         expected=expected,
     )
@@ -335,14 +437,14 @@ def _verify_or_remediate_stop_loss(
                 provider_order_id=provider_order_id,
                 rules=rules,
                 expected=expected,
-                reason_code="attached_stop_loss_rejected",
+                reason_code="attached_protection_rejected",
                 reason=(
                     _optional_text(attach_response.get("failReason"))
-                    or f"OKX attached stop-loss failed with code {fail_code}"
+                    or f"OKX attached TP/SL failed with code {fail_code}"
                 ),
             )
 
-    pending_match = _matching_pending_stop_loss(
+    pending_match = _matching_pending_protection(
         _okx_response_data(
             api.order_algos_pending(inst_type="SWAP", inst_id=rules.inst_id),
             "order_algos_pending",
@@ -351,7 +453,7 @@ def _verify_or_remediate_stop_loss(
         provider_order_id=provider_order_id,
     )
     if pending_match is not None:
-        return {
+        payload = {
             "algoClientOrderId": _optional_text(pending_match.get("algoClOrdId")),
             "algoOrderId": _optional_text(pending_match.get("algoId")),
             "slOrdPx": expected["slOrdPx"],
@@ -360,6 +462,15 @@ def _verify_or_remediate_stop_loss(
             "status": "protected",
             "verification": "pending_algo_order",
         }
+        if "tpTriggerPx" in expected:
+            payload.update(
+                {
+                    "tpOrdPx": expected["tpOrdPx"],
+                    "tpTriggerPx": expected["tpTriggerPx"],
+                    "tpTriggerPxType": expected["tpTriggerPxType"],
+                }
+            )
+        return payload
 
     position = _matching_open_position(
         _okx_response_data(
@@ -375,6 +486,7 @@ def _verify_or_remediate_stop_loss(
             "slOrdPx": expected["slOrdPx"],
             "slTriggerPx": expected["slTriggerPx"],
             "slTriggerPxType": expected["slTriggerPxType"],
+            **_expected_take_profit_public(expected),
             "status": "pending_activation",
             "verification": "no_open_position",
         }
@@ -385,12 +497,12 @@ def _verify_or_remediate_stop_loss(
         rules=rules,
         expected=expected,
         open_position=position,
-        reason_code="active_stop_loss_not_found",
-        reason="Open OKX position has no matching active stop-loss algo order.",
+        reason_code="active_protection_not_found",
+        reason="Open OKX position has no matching active TP/SL algo order.",
     )
 
 
-def _expected_stop_loss(order_params: dict[str, Any]) -> dict[str, str] | None:
+def _expected_protection(order_params: dict[str, Any]) -> dict[str, str] | None:
     attach_algo_orders = order_params.get("attachAlgoOrds")
     if not isinstance(attach_algo_orders, list):
         return None
@@ -407,11 +519,34 @@ def _expected_stop_loss(order_params: dict[str, Any]) -> dict[str, str] | None:
             "slOrdPx": order_price,
             "slTriggerPx": trigger_price,
             "slTriggerPxType": _optional_text(item.get("slTriggerPxType")) or "last",
+            **_expected_take_profit(item),
         }
     return None
 
 
-def _attached_stop_loss_response(
+def _expected_take_profit(item: dict[str, Any]) -> dict[str, str]:
+    trigger_price = _optional_text(item.get("tpTriggerPx"))
+    order_price = _optional_text(item.get("tpOrdPx"))
+    if trigger_price is None or order_price is None:
+        return {}
+    return {
+        "tpOrdPx": order_price,
+        "tpTriggerPx": trigger_price,
+        "tpTriggerPxType": _optional_text(item.get("tpTriggerPxType")) or "last",
+    }
+
+
+def _expected_take_profit_public(expected: dict[str, str]) -> dict[str, str]:
+    if "tpTriggerPx" not in expected:
+        return {}
+    return {
+        "tpOrdPx": expected["tpOrdPx"],
+        "tpTriggerPx": expected["tpTriggerPx"],
+        "tpTriggerPxType": expected["tpTriggerPxType"],
+    }
+
+
+def _attached_protection_response(
     value: object,
     *,
     expected: dict[str, str],
@@ -427,7 +562,7 @@ def _attached_stop_loss_response(
     return None
 
 
-def _matching_pending_stop_loss(
+def _matching_pending_protection(
     items: list[dict[str, Any]],
     *,
     expected: dict[str, str],
@@ -438,10 +573,16 @@ def _matching_pending_stop_loss(
         linked_order_id = _optional_text(item.get("ordId"))
         trigger_price = _optional_text(item.get("slTriggerPx"))
         order_price = _optional_text(item.get("slOrdPx"))
+        tp_trigger_price = _optional_text(item.get("tpTriggerPx"))
+        tp_order_price = _optional_text(item.get("tpOrdPx"))
         state = (_optional_text(item.get("state")) or "").lower()
         if state and state not in {"live", "effective", "partially_effective"}:
             continue
         if trigger_price != expected["slTriggerPx"] or order_price != expected["slOrdPx"]:
+            continue
+        if "tpTriggerPx" in expected and (
+            tp_trigger_price != expected["tpTriggerPx"] or tp_order_price != expected["tpOrdPx"]
+        ):
             continue
         if algo_client_order_id == expected["attachAlgoClOrdId"]:
             return dict(item)
@@ -494,6 +635,7 @@ def _remediate_stop_loss(
             "slOrdPx": expected["slOrdPx"],
             "slTriggerPx": expected["slTriggerPx"],
             "slTriggerPxType": expected["slTriggerPxType"],
+            **_expected_take_profit_public(expected),
             "status": "pending_activation",
             "verification": "no_open_position_after_attach_failure",
         }
@@ -517,6 +659,7 @@ def _remediate_stop_loss(
             "slOrdPx": expected["slOrdPx"],
             "slTriggerPx": expected["slTriggerPx"],
             "slTriggerPxType": expected["slTriggerPxType"],
+            **_expected_take_profit_public(expected),
             "status": "unprotected",
             "verification": reason_code,
         }
@@ -528,6 +671,7 @@ def _remediate_stop_loss(
         "slOrdPx": expected["slOrdPx"],
         "slTriggerPx": expected["slTriggerPx"],
         "slTriggerPxType": expected["slTriggerPxType"],
+        **_expected_take_profit_public(expected),
         "status": "protected_remediated",
         "verification": "standalone_stop_loss_algo_order",
     }
@@ -633,6 +777,9 @@ def _public_normalized_order(params: dict[str, Any]) -> dict[str, Any]:
         stop_loss = _public_attached_stop_loss(attach_algo_orders)
         if stop_loss is not None:
             payload["attachedStopLoss"] = stop_loss
+        take_profit = _public_attached_take_profit(attach_algo_orders)
+        if take_profit is not None:
+            payload["attachedTakeProfit"] = take_profit
     reject_secret_fields(payload)
     return payload
 
@@ -647,7 +794,7 @@ def _okx_attached_algo_client_order_id(client_order_id: str, suffix: str) -> str
     return f"ytm{suffix}{digest[:27]}"
 
 
-def _okx_attached_stop_loss(
+def _okx_attached_tp_sl(
     request: BrokerOrderRequest,
     *,
     rules: OkxSwapInstrumentRules,
@@ -660,15 +807,30 @@ def _okx_attached_stop_loss(
         rules=rules,
     )
     _validate_stop_loss_side(trigger_price, request=request)
-    return {
+    payload = {
         "attachAlgoClOrdId": _okx_attached_algo_client_order_id(
             request.client_order_id,
-            "sl",
+            "ps",
         ),
         "slOrdPx": "-1",
         "slTriggerPx": _decimal_text(trigger_price),
         "slTriggerPxType": "last",
     }
+    if request.take_profit_targets:
+        take_profit = _normalized_take_profit_trigger_price(
+            request.take_profit_targets[0],
+            request=request,
+            rules=rules,
+        )
+        _validate_take_profit_side(take_profit, request=request)
+        payload.update(
+            {
+                "tpOrdPx": "-1",
+                "tpTriggerPx": _decimal_text(take_profit),
+                "tpTriggerPxType": "last",
+            }
+        )
+    return payload
 
 
 def _public_attached_stop_loss(items: list[object]) -> dict[str, str] | None:
@@ -685,6 +847,25 @@ def _public_attached_stop_loss(items: list[object]) -> dict[str, str] | None:
             "slOrdPx": order_price,
             "slTriggerPx": trigger_price,
             "slTriggerPxType": _optional_text(item.get("slTriggerPxType")) or "last",
+        }
+        return {key: value for key, value in payload.items() if value}
+    return None
+
+
+def _public_attached_take_profit(items: list[object]) -> dict[str, str] | None:
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        trigger_price = _optional_text(item.get("tpTriggerPx"))
+        order_price = _optional_text(item.get("tpOrdPx"))
+        if trigger_price is None or order_price is None:
+            continue
+        payload = {
+            "attachAlgoClOrdId": _optional_text(item.get("attachAlgoClOrdId")) or "",
+            "orderPrice": "market" if order_price == "-1" else order_price,
+            "tpOrdPx": order_price,
+            "tpTriggerPx": trigger_price,
+            "tpTriggerPxType": _optional_text(item.get("tpTriggerPxType")) or "last",
         }
         return {key: value for key, value in payload.items() if value}
     return None
@@ -713,6 +894,29 @@ def _validate_stop_loss_side(value: Decimal, *, request: BrokerOrderRequest) -> 
         raise ValueError("OKX short stopLoss must be above entry price")
 
 
+def _normalized_take_profit_trigger_price(
+    value: Decimal,
+    *,
+    request: BrokerOrderRequest,
+    rules: OkxSwapInstrumentRules,
+) -> Decimal:
+    if request.side == "long":
+        return _round_to_tick(value, tick_size=rules.tick_size, side="sell")
+    if request.side == "short":
+        return _round_to_tick(value, tick_size=rules.tick_size, side="buy")
+    raise ValueError("OKX attached take-profit side is unsupported")
+
+
+def _validate_take_profit_side(value: Decimal, *, request: BrokerOrderRequest) -> None:
+    reference = request.limit_price if request.limit_price is not None else request.price_reference
+    if reference is None:
+        return
+    if request.side == "long" and value <= reference:
+        raise ValueError("OKX long takeProfit must be above entry price")
+    if request.side == "short" and value >= reference:
+        raise ValueError("OKX short takeProfit must be below entry price")
+
+
 def _okx_order_type(order_type: str) -> str:
     mapping = {
         "limit": "limit",
@@ -722,6 +926,29 @@ def _okx_order_type(order_type: str) -> str:
         return mapping[order_type]
     except KeyError as exc:
         raise ValueError("OKX SWAP order type is unsupported") from exc
+
+
+def _effective_okx_order_type(request: BrokerOrderRequest, *, side: str) -> str:
+    order_type = _okx_order_type(request.order_type)
+    if (
+        request.execution_mode == "real"
+        and request.position_effect == "open"
+        and order_type == "market"
+    ):
+        _bounded_market_limit_price(request, side=side)
+        return "ioc"
+    return order_type
+
+
+def _bounded_market_limit_price(request: BrokerOrderRequest, *, side: str) -> Decimal:
+    if request.price_reference is None:
+        raise ValueError("OKX real market orders require priceReference for slippage cap")
+    if request.max_slippage_bps is None:
+        raise ValueError("OKX real market orders require maxSlippageBps")
+    multiplier = request.max_slippage_bps / Decimal("10000")
+    if side == "buy":
+        return request.price_reference * (Decimal("1") + multiplier)
+    return request.price_reference * (Decimal("1") - multiplier)
 
 
 def _okx_side(request: BrokerOrderRequest) -> str:

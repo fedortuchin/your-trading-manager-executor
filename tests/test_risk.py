@@ -10,7 +10,9 @@ from ytm_executor.risk import (
     RiskState,
     evaluate_command_risk,
     read_risk_policy,
+    read_risk_state,
     risk_policy_public_summary,
+    update_risk_state_from_reconciliation_snapshot,
     write_risk_policy,
 )
 
@@ -27,14 +29,12 @@ def test_write_and_read_local_risk_policy(tmp_path: Path) -> None:
     write_risk_policy(policy_file, _policy())
 
     loaded = read_risk_policy(policy_file)
+    payload = policy_file.read_text(encoding="utf-8")
 
     assert loaded.configured is True
-    assert loaded.allowed_symbols == ("BTCUSDT", "SBER")
-    assert loaded.allowed_markets == ("usdm_futures",)
-    assert loaded.allowed_margin_modes == ("cross",)
-    assert loaded.allowed_order_types == ("limit", "market")
-    assert loaded.max_order_notional == Decimal("1000")
-    assert loaded.max_symbol_notional == {"BTCUSDT": Decimal("5000"), "SBER": Decimal("5000")}
+    assert loaded.max_daily_loss == Decimal("250")
+    assert "allowedSymbols" not in payload
+    assert "maxLeverage" not in payload
     assert policy_file.stat().st_mode & 0o777 == 0o600
 
 
@@ -42,7 +42,7 @@ def test_risk_public_summary_does_not_expose_symbol_list() -> None:
     summary = risk_policy_public_summary(_policy())
 
     assert summary["configured"] is True
-    assert summary["allowedSymbolCount"] == 2
+    assert summary["appManagedTradingLimits"] is True
     assert "BTCUSDT" not in repr(summary)
 
 
@@ -64,6 +64,7 @@ def test_risk_policy_allows_skipped_local_limits(tmp_path: Path) -> None:
             max_position_notional=None,
             max_symbol_notional={},
             max_daily_loss=None,
+            max_total_drawdown=None,
             max_leverage=Decimal("1"),
             position_mode="one_way",
         ),
@@ -73,14 +74,14 @@ def test_risk_policy_allows_skipped_local_limits(tmp_path: Path) -> None:
         _command(),
         execution_mode="external_paper",
         policy=read_risk_policy(policy_file),
-        state=RiskState(realized_loss_by_date={}),
+        state=_state(),
         now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
     )
 
     assert decision.passed is True
 
 
-def test_risk_rejects_symbol_when_local_symbol_limit_is_configured() -> None:
+def test_risk_ignores_app_owned_symbol_limits_locally() -> None:
     command = _command()
     command["symbol"] = "ETHUSDT"
 
@@ -88,12 +89,11 @@ def test_risk_rejects_symbol_when_local_symbol_limit_is_configured() -> None:
         command,
         execution_mode="external_paper",
         policy=_policy(),
-        state=RiskState(realized_loss_by_date={}),
+        state=_state(),
         now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
     )
 
-    assert decision.passed is False
-    assert decision.reason_code == "risk_symbol_not_allowed"
+    assert decision.passed is True
 
 
 def test_risk_allows_command_inside_local_limits() -> None:
@@ -101,7 +101,7 @@ def test_risk_allows_command_inside_local_limits() -> None:
         _command(),
         execution_mode="external_paper",
         policy=_policy(),
-        state=RiskState(realized_loss_by_date={}),
+        state=_state(),
         now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
     )
 
@@ -113,7 +113,7 @@ def test_risk_rejects_real_when_policy_is_paper_only() -> None:
         _command(),
         execution_mode="real",
         policy=_policy(paper_only=True),
-        state=RiskState(realized_loss_by_date={}),
+        state=_state(),
         now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
     )
 
@@ -124,9 +124,9 @@ def test_risk_rejects_real_when_policy_is_paper_only() -> None:
 def test_risk_rejects_daily_loss_limit_reached() -> None:
     decision = evaluate_command_risk(
         _command(),
-        execution_mode="external_paper",
-        policy=_policy(),
-        state=RiskState(realized_loss_by_date={"2026-05-10": Decimal("250")}),
+        execution_mode="real",
+        policy=_policy(paper_only=False),
+        state=_state(losses={"2026-05-10": Decimal("250")}),
         now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
     )
 
@@ -134,39 +134,74 @@ def test_risk_rejects_daily_loss_limit_reached() -> None:
     assert decision.reason_code == "risk_daily_loss_exceeded"
 
 
+def test_risk_state_updates_drawdown_from_reconciliation_snapshot(tmp_path: Path) -> None:
+    state_file = tmp_path / "risk-state.json"
+
+    update_risk_state_from_reconciliation_snapshot(
+        path=state_file,
+        snapshot={
+            "balances": [
+                {"currency": "USDT", "equity": "980", "usdEquity": "980"},
+            ]
+        },
+        now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
+    )
+
+    state = read_risk_state(state_file)
+    assert state.initial_equity == Decimal("980")
+    assert state.current_equity == Decimal("980")
+    assert state.realized_loss_by_date["2026-05-10"] == Decimal("0")
+
+    update_risk_state_from_reconciliation_snapshot(
+        path=state_file,
+        snapshot={
+            "balances": [
+                {"currency": "USDT", "equity": "900", "usdEquity": "900"},
+            ]
+        },
+        now=datetime(2026, 5, 10, 11, 1, tzinfo=UTC),
+    )
+
+    state = read_risk_state(state_file)
+    assert state.initial_equity == Decimal("980")
+    assert state.current_equity == Decimal("900")
+    assert state.realized_loss_by_date["2026-05-10"] == Decimal("80")
+    assert state_file.stat().st_mode & 0o777 == 0o600
+
+
 def test_risk_rejects_futures_margin_mode_not_allowed() -> None:
     command = _command()
-    command["commandPayload"]["marginMode"] = "isolated"
+    command["commandPayload"]["marginMode"] = "portfolio"
 
     decision = evaluate_command_risk(
         command,
         execution_mode="real",
         policy=_policy(paper_only=False),
-        state=RiskState(realized_loss_by_date={}),
+        state=_state(),
         now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
     )
 
     assert decision.passed is False
-    assert decision.reason_code == "risk_futures_margin_mode_not_allowed"
+    assert decision.reason_code == "risk_futures_margin_mode_unsupported"
 
 
 def test_risk_applies_futures_margin_gate_to_okx_swap() -> None:
     command = _command(market="okx_swap")
-    command["commandPayload"]["marginMode"] = "isolated"
+    command["commandPayload"]["marginMode"] = "portfolio"
 
     decision = evaluate_command_risk(
         command,
         execution_mode="real",
         policy=_policy(paper_only=False, allowed_markets=("okx_swap",)),
-        state=RiskState(realized_loss_by_date={}),
+        state=_state(),
         now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
     )
 
     assert decision.passed is False
-    assert decision.reason_code == "risk_futures_margin_mode_not_allowed"
+    assert decision.reason_code == "risk_futures_margin_mode_unsupported"
 
 
-def test_risk_rejects_symbol_position_limit() -> None:
+def test_risk_ignores_app_owned_position_limits_locally() -> None:
     command = _command()
     command["commandPayload"]["projectedPositionNotional"] = "5001"
 
@@ -174,12 +209,11 @@ def test_risk_rejects_symbol_position_limit() -> None:
         command,
         execution_mode="real",
         policy=replace(_policy(paper_only=False), max_position_notional=Decimal("10000")),
-        state=RiskState(realized_loss_by_date={}),
+        state=_state(),
         now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
     )
 
-    assert decision.passed is False
-    assert decision.reason_code == "risk_symbol_position_exceeded"
+    assert decision.passed is True
 
 
 def test_risk_rejects_futures_reduce_only_disabled_for_close() -> None:
@@ -191,7 +225,7 @@ def test_risk_rejects_futures_reduce_only_disabled_for_close() -> None:
         command,
         execution_mode="real",
         policy=_policy(paper_only=False),
-        state=RiskState(realized_loss_by_date={}),
+        state=_state(),
         now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
     )
 
@@ -199,7 +233,7 @@ def test_risk_rejects_futures_reduce_only_disabled_for_close() -> None:
     assert decision.reason_code == "risk_futures_reduce_only_required"
 
 
-def test_risk_rounds_command_leverage_up_before_limit_check() -> None:
+def test_risk_ignores_app_owned_leverage_limits_locally() -> None:
     command = _command()
     command["commandPayload"]["leverage"] = "1.1"
 
@@ -207,12 +241,11 @@ def test_risk_rounds_command_leverage_up_before_limit_check() -> None:
         command,
         execution_mode="real",
         policy=_policy(paper_only=False),
-        state=RiskState(realized_loss_by_date={}),
+        state=_state(),
         now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
     )
 
-    assert decision.passed is False
-    assert decision.reason_code == "risk_leverage_exceeded"
+    assert decision.passed is True
 
 
 def _policy(
@@ -233,6 +266,7 @@ def _policy(
         max_position_notional=Decimal("5000"),
         max_symbol_notional={"BTCUSDT": Decimal("5000"), "SBER": Decimal("5000")},
         max_daily_loss=Decimal("250"),
+        max_total_drawdown=None,
         max_leverage=Decimal("1"),
         position_mode="one_way",
     )
@@ -248,6 +282,21 @@ def _command(*, market: str = "usdm_futures") -> dict[str, object]:
             "orderType": "limit",
             "positionEffect": "open",
             "projectedPositionNotional": "100",
+            "riskControls": {"riskDecisionId": "risk-1", "source": "ytm"},
         },
         "symbol": "BTCUSDT",
     }
+
+
+def _state(
+    *,
+    losses: dict[str, Decimal] | None = None,
+    initial_equity: Decimal = Decimal("1000"),
+    current_equity: Decimal = Decimal("1000"),
+) -> RiskState:
+    return RiskState(
+        realized_loss_by_date=losses if losses is not None else {"2026-05-10": Decimal("0")},
+        daily_equity_open_by_date={"2026-05-10": Decimal("1000")},
+        initial_equity=initial_equity,
+        current_equity=current_equity,
+    )

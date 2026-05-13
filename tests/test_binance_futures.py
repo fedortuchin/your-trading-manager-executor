@@ -154,6 +154,7 @@ def _request(
         limit_price=limit_price,
         stop_price=None,
         stop_loss=None,
+        take_profit_targets=(),
         price_reference=None,
         time_in_force=None,
     )

@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 
 from ytm_executor import __version__
 from ytm_executor.client import YtmClient
+from ytm_executor.execution_store import LocalExecutionStore
 from ytm_executor.preflight import CommandPreflightDecision, preflight_command
 from ytm_executor.reconciliation import OkxSwapReconciliationAdapter
 from ytm_executor.risk import (
@@ -24,10 +25,12 @@ from ytm_executor.risk import (
     read_risk_state,
     risk_policy_public_summary,
     risk_policy_to_file_payload,
+    update_risk_state_from_reconciliation_snapshot,
     write_risk_policy,
 )
 from ytm_executor.secret_store import DEFAULT_KEY_FILE, DEFAULT_SECRETS_FILE, LocalSecretStore
 from ytm_executor.state import (
+    DEFAULT_HOME,
     DEFAULT_STATE_FILE,
     ExecutorState,
     expect_object,
@@ -48,6 +51,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--validations-file", default=str(DEFAULT_VALIDATIONS_FILE))
     parser.add_argument("--risk-policy-file", default=str(DEFAULT_RISK_POLICY_FILE))
     parser.add_argument("--risk-state-file", default=str(DEFAULT_RISK_STATE_FILE))
+    parser.add_argument("--executions-file", default=str(DEFAULT_HOME / "executions.json"))
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     enroll_parser = subparsers.add_parser("enroll")
@@ -89,21 +93,37 @@ def main(argv: list[str] | None = None) -> int:
     risk_subparsers = risk_parser.add_subparsers(dest="risk_command", required=True)
     risk_subparsers.add_parser("show")
     risk_init = risk_subparsers.add_parser("init")
-    risk_init.add_argument("--allow-market", action="append", default=[])
-    risk_init.add_argument("--allow-margin-mode", action="append", default=[])
-    risk_init.add_argument("--allow-symbol", action="append", default=[])
-    risk_init.add_argument("--allow-order-type", action="append", default=[])
-    risk_init.add_argument("--max-order-notional")
-    risk_init.add_argument("--max-position-notional")
+    risk_init.add_argument("--allow-market", action="append", default=[], help=argparse.SUPPRESS)
+    risk_init.add_argument(
+        "--allow-margin-mode",
+        action="append",
+        default=[],
+        help=argparse.SUPPRESS,
+    )
+    risk_init.add_argument("--allow-symbol", action="append", default=[], help=argparse.SUPPRESS)
+    risk_init.add_argument(
+        "--allow-order-type",
+        action="append",
+        default=[],
+        help=argparse.SUPPRESS,
+    )
+    risk_init.add_argument("--max-order-notional", help=argparse.SUPPRESS)
+    risk_init.add_argument("--max-position-notional", help=argparse.SUPPRESS)
     risk_init.add_argument(
         "--max-symbol-notional",
         action="append",
         default=[],
-        help="Per-symbol exposure limit in SYMBOL=VALUE format.",
+        help=argparse.SUPPRESS,
     )
     risk_init.add_argument("--max-daily-loss")
-    risk_init.add_argument("--max-leverage", default="1")
-    risk_init.add_argument("--position-mode", default="one_way", choices=["one_way"])
+    risk_init.add_argument("--max-total-drawdown")
+    risk_init.add_argument("--max-leverage", default="1", help=argparse.SUPPRESS)
+    risk_init.add_argument(
+        "--position-mode",
+        default="one_way",
+        choices=["one_way"],
+        help=argparse.SUPPRESS,
+    )
     risk_init.add_argument("--allow-real", action="store_true")
     risk_init.add_argument("--kill-switch-off", action="store_true")
     risk_init.add_argument("--force", action="store_true")
@@ -200,6 +220,7 @@ def _run(args: argparse.Namespace) -> int:
                 store=store,
                 name=args.reconciliation_broker_name,
                 execution_mode=None,
+                risk_state_file=Path(args.risk_state_file),
             )
             print(json.dumps(response, ensure_ascii=False, sort_keys=True))
         return 0
@@ -227,6 +248,7 @@ def _run(args: argparse.Namespace) -> int:
                 "access_token": state.access_token,
                 "store": store,
                 "name": args.reconciliation_broker_name,
+                "risk_state_file": Path(args.risk_state_file),
                 "interval_seconds": max(1.0, float(args.reconciliation_interval_seconds)),
                 "stop_event": stop_event,
             },
@@ -306,6 +328,7 @@ def _okx_reconciliation_loop(
     access_token: str,
     store: LocalSecretStore,
     name: str,
+    risk_state_file: Path,
     interval_seconds: float,
     stop_event: Event,
 ) -> None:
@@ -317,6 +340,7 @@ def _okx_reconciliation_loop(
                 store=store,
                 name=name,
                 execution_mode=None,
+                risk_state_file=risk_state_file,
             )
             print(json.dumps(response, ensure_ascii=False, sort_keys=True))
         except Exception as exc:
@@ -340,6 +364,21 @@ def _process_lease_response(
     if not isinstance(item, dict):
         return
     print(json.dumps(item, ensure_ascii=False, sort_keys=True))
+    command = expect_object(item, "command")
+    command_id = _expect_text(command, "id")
+    execution_store = LocalExecutionStore(Path(args.executions_file))
+    cached = execution_store.get(command_id)
+    if cached is not None:
+        _record_preflight_decision(
+            client,
+            access_token,
+            item,
+            CommandPreflightDecision(
+                status=cached.status,
+                result_payload=cached.result_payload,
+            ),
+        )
+        return
     risk_policy = read_risk_policy(Path(args.risk_policy_file))
     decision = preflight_command(
         item,
@@ -353,6 +392,12 @@ def _process_lease_response(
         validation_summaries=validation_store.list_public(),
         real_order_placement_enabled=args.enable_real_orders,
     )
+    if command.get("executionMode") == "real" and decision.status == "acknowledged":
+        execution_store.put(
+            command_id=command_id,
+            status=decision.status,
+            result_payload=decision.result_payload,
+        )
     _record_preflight_decision(client, access_token, item, decision)
 
 
@@ -395,7 +440,7 @@ def _risk(args: argparse.Namespace) -> int:
             raise ValueError("risk policy already exists; use --force to overwrite it")
         policy = _risk_policy_from_args(args)
         write_risk_policy(policy_file, policy)
-        print("local risk policy written")
+        print("local fail-safe policy written")
         return 0
     return 2
 
@@ -425,6 +470,7 @@ def _reconciliation(args: argparse.Namespace) -> int:
             store=store,
             name=args.name,
             execution_mode=args.execution_mode,
+            risk_state_file=Path(args.risk_state_file),
         )
         print(json.dumps(response, ensure_ascii=False, sort_keys=True))
         return 0
@@ -438,6 +484,7 @@ def _capture_and_upload_okx_reconciliation(
     store: LocalSecretStore,
     name: str,
     execution_mode: str | None,
+    risk_state_file: Path | None,
 ) -> dict[str, object]:
     secret = store.get(provider="okx", name=name)
     adapter = OkxSwapReconciliationAdapter(
@@ -446,6 +493,11 @@ def _capture_and_upload_okx_reconciliation(
         passphrase=_required_text(secret.get("passphrase"), "passphrase"),
     )
     snapshot = adapter.capture_snapshot()
+    if risk_state_file is not None:
+        update_risk_state_from_reconciliation_snapshot(
+            path=risk_state_file,
+            snapshot=snapshot,
+        )
     return client.record_reconciliation_snapshot(
         access_token=access_token,
         execution_mode=execution_mode,
@@ -494,6 +546,10 @@ def _risk_policy_from_args(args: argparse.Namespace) -> RiskPolicy:
         ),
         max_symbol_notional=_symbol_notional_limits(args.max_symbol_notional),
         max_daily_loss=_optional_decimal_arg(args.max_daily_loss, "max-daily-loss"),
+        max_total_drawdown=_optional_decimal_arg(
+            args.max_total_drawdown,
+            "max-total-drawdown",
+        ),
         max_leverage=Decimal(str(args.max_leverage)),
         position_mode=str(args.position_mode).strip().lower(),
     )

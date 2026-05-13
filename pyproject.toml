@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ytm-executor"
-version = "0.7.7"
+version = "0.7.8"
 description = "Self-hosted zero-secret executor for Your Trading Manager."
 readme = "README.md"
 requires-python = ">=3.13"

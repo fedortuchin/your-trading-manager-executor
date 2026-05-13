@@ -31,7 +31,7 @@ sha256sum -c SHA256SUMS
 Verify a signed Docker image after installing `cosign`:
 
 ```bash
-cosign verify ghcr.io/fedortuchin/your-trading-manager-executor:v0.7.7 \
+cosign verify ghcr.io/fedortuchin/your-trading-manager-executor:v0.7.8 \
   --certificate-identity-regexp 'https://github.com/fedortuchin/your-trading-manager-executor/.github/workflows/ci.yml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
@@ -39,7 +39,7 @@ cosign verify ghcr.io/fedortuchin/your-trading-manager-executor:v0.7.7 \
 For production installs, prefer a release tag or immutable digest:
 
 ```text
-ghcr.io/fedortuchin/your-trading-manager-executor:v0.7.7
+ghcr.io/fedortuchin/your-trading-manager-executor:v0.7.8
 ghcr.io/fedortuchin/your-trading-manager-executor@sha256:<digest>
 ```
 
@@ -52,8 +52,8 @@ available; otherwise use an annotated tag and rely on cosign-signed Docker image
 checksums.
 
 ```bash
-git tag -a v0.7.7 -m "v0.7.7"
-git push origin v0.7.7
+git tag -a v0.7.8 -m "v0.7.8"
+git push origin v0.7.8
 ```
 
 The GitHub Actions workflow publishes the image, signs it, generates an SBOM, and attaches release

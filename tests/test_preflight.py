@@ -53,6 +53,7 @@ def test_preflight_acknowledges_external_paper_without_order_placement() -> None
                 "provider": "binance",
                 "side": "long",
                 "symbol": "BTCUSDT",
+                "takeProfitTargets": ["110"],
             },
             "reason": "broker adapters are not enabled in this foundation build",
         },
@@ -189,7 +190,7 @@ def test_preflight_rejects_risk_kill_switch() -> None:
     assert decision.result_payload["preflightReasonCode"] == "risk_kill_switch_enabled"
 
 
-def test_preflight_rejects_order_over_local_notional_limit() -> None:
+def test_preflight_ignores_app_owned_notional_limit_locally() -> None:
     command = _leased_command(provider="binance", execution_mode="external_paper")
     command["command"]["commandPayload"]["orderNotional"] = "1001"
 
@@ -204,8 +205,8 @@ def test_preflight_rejects_order_over_local_notional_limit() -> None:
         now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
     )
 
-    assert decision.status == "rejected"
-    assert decision.result_payload["preflightReasonCode"] == "risk_order_notional_exceeded"
+    assert decision.status == "acknowledged"
+    assert decision.result_payload["riskPreflight"] == "passed"
 
 
 def test_preflight_rejects_invalid_adapter_order_request() -> None:
@@ -523,6 +524,7 @@ def _leased_command(*, provider: str, execution_mode: str) -> dict[str, object]:
                 "positionEffect": "open",
                 "price": "100",
                 "projectedPositionNotional": "100",
+                "riskControls": {"riskDecisionId": "risk-1", "source": "ytm"},
             },
             "executionAccountSource": "provider",
             "executionMode": execution_mode,
@@ -531,6 +533,7 @@ def _leased_command(*, provider: str, execution_mode: str) -> dict[str, object]:
             "side": "long",
             "status": "created",
             "symbol": "BTCUSDT",
+            "takeProfit": {"targets": ["110"]},
         },
         "lease": {"id": "lease-1"},
     }
@@ -577,10 +580,16 @@ def _risk_policy(
         max_position_notional=Decimal("5000"),
         max_symbol_notional={symbol: Decimal("5000")},
         max_daily_loss=Decimal("250"),
+        max_total_drawdown=None,
         max_leverage=Decimal("1"),
         position_mode="one_way",
     )
 
 
 def _risk_state() -> RiskState:
-    return RiskState(realized_loss_by_date={})
+    return RiskState(
+        realized_loss_by_date={"2026-05-10": Decimal("0")},
+        daily_equity_open_by_date={"2026-05-10": Decimal("1000")},
+        initial_equity=Decimal("1000"),
+        current_equity=Decimal("1000"),
+    )

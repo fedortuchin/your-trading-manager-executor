@@ -27,7 +27,7 @@ def test_real_okx_swap_dry_run_reaches_order_precheck_without_placement(monkeypa
             "passphrase": "okx-passphrase",
         },
         risk_policy=_risk_policy(),
-        risk_state=RiskState(realized_loss_by_date={}),
+        risk_state=_risk_state(),
         validation_summaries=(
             {
                 "checkedAt": "2026-05-10T10:00:00Z",
@@ -79,7 +79,7 @@ def test_external_paper_okx_swap_precheck_acknowledges_without_placement(monkeyp
             "passphrase": "okx-passphrase",
         },
         risk_policy=_risk_policy(paper_only=True),
-        risk_state=RiskState(realized_loss_by_date={}),
+        risk_state=_risk_state(),
         validation_summaries=(
             {
                 "checkedAt": "2026-05-10T10:00:00Z",
@@ -134,6 +134,9 @@ class FakeOkxSwapApi:
             "msg": "",
         }
 
+    def get_account_config(self):
+        return {"code": "0", "data": [{"acctLv": "3", "posMode": "net_mode"}], "msg": ""}
+
     def get_positions(self, *, inst_type: str, inst_id: str):
         raise AssertionError("positions must not be queried for validate-only precheck")
 
@@ -166,6 +169,7 @@ def _leased_real_okx_command() -> dict[str, object]:
                 "price": "100",
                 "priceReference": "100",
                 "projectedPositionNotional": "120",
+                "riskControls": {"riskDecisionId": "risk-1", "source": "ytm"},
             },
             "executionAccountSource": "provider",
             "executionMode": "real",
@@ -174,6 +178,7 @@ def _leased_real_okx_command() -> dict[str, object]:
             "side": "long",
             "status": "created",
             "stopLoss": "95",
+            "takeProfit": {"targets": ["110"]},
             "symbol": "BTCUSDT",
         },
         "lease": {"id": "lease-1"},
@@ -194,6 +199,16 @@ def _risk_policy(*, paper_only: bool = False) -> RiskPolicy:
         max_position_notional=Decimal("5000"),
         max_symbol_notional={"BTCUSDT": Decimal("5000")},
         max_daily_loss=Decimal("250"),
+        max_total_drawdown=None,
         max_leverage=Decimal("1"),
         position_mode="one_way",
+    )
+
+
+def _risk_state() -> RiskState:
+    return RiskState(
+        realized_loss_by_date={"2026-05-10": Decimal("0")},
+        daily_equity_open_by_date={"2026-05-10": Decimal("1000")},
+        initial_equity=Decimal("1000"),
+        current_equity=Decimal("1000"),
     )

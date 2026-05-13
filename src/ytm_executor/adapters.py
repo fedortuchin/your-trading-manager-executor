@@ -34,8 +34,10 @@ class BrokerOrderRequest:
     limit_price: Decimal | None
     stop_price: Decimal | None
     stop_loss: Decimal | None
+    take_profit_targets: tuple[Decimal, ...]
     price_reference: Decimal | None
     time_in_force: str | None
+    max_slippage_bps: Decimal | None = None
     market: str | None = None
     margin_mode: str | None = None
     leverage: Decimal | None = None
@@ -103,10 +105,12 @@ def build_order_request(command: dict[str, Any], *, execution_mode: str) -> Brok
         stop_loss=_optional_decimal(
             _first(command, payload, ("stopLoss", "stopLossTriggerPrice", "slTriggerPx"))
         ),
+        take_profit_targets=_take_profit_targets(_first(command, payload, ("takeProfit",))),
         price_reference=_optional_decimal(
             _first(command, payload, ("priceReference", "entryPriceReference", "markPrice"))
         ),
         time_in_force=_optional_text(_first(command, payload, ("timeInForce",))),
+        max_slippage_bps=_optional_decimal(_first(command, payload, ("maxSlippageBps",))),
         market=_optional_text(
             _first(command, payload, ("market", "brokerMarket", "exchangeMarket")),
         ),
@@ -147,8 +151,14 @@ def order_request_public_payload(request: BrokerOrderRequest) -> dict[str, Any]:
         payload["stopPrice"] = _decimal_text(request.stop_price)
     if request.stop_loss is not None:
         payload["stopLoss"] = _decimal_text(request.stop_loss)
+    if request.take_profit_targets:
+        payload["takeProfitTargets"] = [
+            _decimal_text(value) for value in request.take_profit_targets
+        ]
     if request.price_reference is not None:
         payload["priceReference"] = _decimal_text(request.price_reference)
+    if request.max_slippage_bps is not None:
+        payload["maxSlippageBps"] = _decimal_text(request.max_slippage_bps)
     if request.time_in_force:
         payload["timeInForce"] = request.time_in_force
     if request.market:
@@ -173,6 +183,21 @@ def _validate_order_request(request: BrokerOrderRequest) -> None:
 def _command_payload(command: dict[str, Any]) -> dict[str, Any]:
     payload = command.get("commandPayload")
     return payload if isinstance(payload, dict) else {}
+
+
+def _take_profit_targets(value: object) -> tuple[Decimal, ...]:
+    if value in (None, ""):
+        return ()
+    raw_targets = value.get("targets") if isinstance(value, dict) else value
+    if not isinstance(raw_targets, list):
+        raise ValueError("takeProfit targets must be a list")
+    targets: list[Decimal] = []
+    for item in raw_targets:
+        target = _optional_decimal(item)
+        if target is None:
+            raise ValueError("takeProfit targets must be positive")
+        targets.append(target)
+    return tuple(targets)
 
 
 def _first(command: dict[str, Any], payload: dict[str, Any], keys: tuple[str, ...]) -> object:

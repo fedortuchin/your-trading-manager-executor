@@ -88,7 +88,7 @@ def preflight_command(
         command,
         execution_mode=execution_mode,
         policy=risk_policy or missing_risk_policy(),
-        state=risk_state or RiskState(realized_loss_by_date={}),
+        state=risk_state or RiskState(realized_loss_by_date={}, daily_equity_open_by_date={}),
         now=timestamp,
     )
     if not risk_decision.passed:

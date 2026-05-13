@@ -34,7 +34,7 @@ Heartbeat may report non-secret local credential metadata:
 
 ```json
 {
-  "clientVersion": "0.7.7",
+  "clientVersion": "0.7.8",
   "heartbeatStatus": "online",
   "capabilities": {
     "leases": true,
@@ -45,15 +45,13 @@ Heartbeat may report non-secret local credential metadata:
       }
     ],
     "localRiskPolicy": {
-      "allowedOrderTypeCount": 1,
-      "allowedSymbolCount": 2,
+      "appManagedTradingLimits": true,
       "configured": true,
       "enabled": true,
       "killSwitch": false,
       "limits": {
         "maxDailyLoss": true,
-        "maxOrderNotional": true,
-        "maxPositionNotional": true
+        "maxTotalDrawdown": true
       },
       "paperOnly": true
     }
@@ -79,9 +77,10 @@ waiting for the heartbeat or reconciliation intervals. `pollIntervalSeconds` con
 server-side check cadence during the open request; broker secrets are still never included.
 
 The executor repeats local checks after leasing. A provider-backed command is rejected locally when
-the local risk policy is missing, disabled, kill-switched, paper-only for `real`, or the command
-violates any configured local market, margin mode, instrument, order type, notional, projected
-position, per-symbol exposure, daily loss, leverage, position mode, or reduce-only limits.
+the local fail-safe policy is missing, disabled, kill-switched, paper-only for `real`, missing YTM
+risk attestation for `real`, violates futures reduce-only semantics, or hits optional local
+daily/total drawdown stops. Trading limits such as symbols, notional, leverage, and max open trades
+are owned by YTM and sent as sanitized `commandPayload.riskControls`.
 
 After risk preflight, the executor normalizes the command into a broker adapter order request. The
 request must include provider, symbol, side, position effect, order type, quantity or notional, and
@@ -110,16 +109,17 @@ margin mode.
 
 For OKX `real`, a command may explicitly request
 `commandPayload.adapter=okx_swap_mainnet_order`. This adapter is disabled unless the executor was
-started with `--enable-real-orders`. When enabled, the executor still repeats local risk checks,
-requires `stopLoss` for opening orders, attaches that stop-loss to the entry order through OKX
-`attachAlgoOrds`, normalizes the order, sets integer leverage with `POST /api/v5/account/set-leverage`,
-calls OKX `order-precheck`, and only then calls `POST /api/v5/trade/order`. Attached stop-loss uses
-`slOrdPx=-1` for market execution after the trigger and `slTriggerPxType=last` by default. After
-submit, the executor verifies a matching pending OKX stop-loss algo order. If no matching algo exists
-and no position is open yet, it reports
-`protectionStatus=pending_activation`. If a position is open without a matching stop-loss, it tries
-to place a standalone reduce-only conditional stop-loss and reports
-`protectionStatus=protected_remediated` or `protectionStatus=unprotected`. The sanitized result uses
+started with `--enable-real-orders`. When enabled, the executor still repeats local fail-safe
+checks, hard-validates OKX account configuration (`net_mode`, supported margin account levels),
+requires opening-order `stopLoss` and take-profit, converts real market entries into bounded
+IOC-limit orders using `maxSlippageBps`, attaches TP/SL through OKX `attachAlgoOrds`, normalizes the
+order, verifies integer leverage with `POST /api/v5/account/set-leverage`, calls OKX
+`order-precheck`, looks up an existing order by deterministic `clOrdId`, and only then calls
+`POST /api/v5/trade/order`. Attached TP/SL uses market close prices (`tpOrdPx=-1`, `slOrdPx=-1`)
+and `last` trigger type by default. After submit, the executor verifies a matching pending OKX TP/SL
+algo order. If no matching algo exists and no position is open yet, it reports
+`protectionStatus=pending_activation`; if protection is missing while a position is open, it reports
+`protectionStatus=unprotected`. The sanitized result uses
 `executorAction=order_submitted` and includes `providerOrderId`; broker secrets and raw
 authorization data are never uploaded to YTM.
 

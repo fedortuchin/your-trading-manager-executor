@@ -20,7 +20,9 @@ Current foundation build:
     `https://www.okx.com`
 - Optional OKX real-order adapter egress when a `real` command explicitly requests
   `okx_swap_mainnet_order` and the executor is started with `--enable-real-orders`: OKX SWAP
-  mainnet `account/instruments`, `trade/order-precheck`, and `trade/order`.
+  mainnet `account/config`, `account/instruments`, `account/set-leverage`, `trade/order-precheck`,
+  `trade/order`, `trade/order` lookup by `clOrdId`, `trade/order-algos-pending`, and
+  `account/positions`.
 - Continuous `ytm-executor run` keeps a bounded long-poll connection to the configured YTM server
   for command leasing and sends heartbeat on a separate interval. It only needs broker egress when
   broker adapters are enabled for a leased command, except for explicit validate-only adapter calls
@@ -31,8 +33,9 @@ Current foundation build:
   `trade/orders-pending`, `trade/orders-history`, `trade/order-algos-pending`,
   `trade/order-algos-history`, and `trade/fills-history`.
 - Reconciliation snapshot upload sends sanitized provider state only to the configured YTM server.
-- Local risk policy and risk state are read from the executor host filesystem and do not require
-  network access. YTM receives only sanitized risk summary counts and mode flags in heartbeat.
+- Local fail-safe policy and risk state are read from the executor host filesystem and do not
+  require network access. YTM receives only sanitized configured/enabled/kill-switch/paper-only
+  flags and drawdown-limit presence in heartbeat.
 
 The executor stores the allowed YTM host during enrollment and refuses YTM API requests to any other
 host.
@@ -66,13 +69,13 @@ selected broker API domains. Expected examples:
   pre-trade normalization, and calls `test_order`, not `new_order`.
 - OKX: OKX REST API domain for the user's registered region. The current OKX SWAP mainnet adapter
   uses `python-okx==0.4.1`, reads `account/instruments`, and calls `trade/order-precheck`.
-  The disabled-by-default real adapter requires an opening-order stop-loss, attaches it through OKX
-  `attachAlgoOrds`, sets integer leverage through `account/set-leverage`, and also calls
-  `trade/order` after precheck when `--enable-real-orders` is set.
-  Post-submit stop-loss verification uses `trade/order-algos-pending` and `account/positions`; if
-  an open position lacks a matching stop-loss, remediation calls `trade/order-algo` for a
-  reduce-only conditional stop-loss. Reconciliation uses read-only account/order/algo/fill
-  endpoints:
+  The disabled-by-default real adapter hard-validates `account/config`, requires opening-order
+  stop-loss and take-profit, attaches both through OKX `attachAlgoOrds`, sets and verifies integer
+  leverage through `account/set-leverage`, converts market entries into bounded IOC-limit orders,
+  looks up an existing order by deterministic `clOrdId`, and calls `trade/order` after precheck
+  only when `--enable-real-orders` is set.
+  Post-submit protection verification uses `trade/order-algos-pending` and `account/positions`.
+  Reconciliation uses read-only account/order/algo/fill endpoints:
   `account/balance`, `account/positions`, `trade/orders-pending`, `trade/orders-history`,
   `trade/order-algos-pending`, `trade/order-algos-history`, and `trade/fills-history`. The first
   build uses the standard `https://www.okx.com` domain; EU, US, AU, or other regional OKX accounts

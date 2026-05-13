@@ -26,7 +26,7 @@ def test_real_binance_futures_dry_run_reaches_order_test_without_placement(monke
             "apiSecret": "binance-private-secret",
         },
         risk_policy=_risk_policy(),
-        risk_state=RiskState(realized_loss_by_date={}),
+        risk_state=_risk_state(),
         validation_summaries=(
             {
                 "checkedAt": "2026-05-10T10:00:00Z",
@@ -116,6 +116,7 @@ def _leased_real_binance_command() -> dict[str, object]:
                 "price": "100.06",
                 "projectedPositionNotional": "6",
                 "quantity": "0.0609",
+                "riskControls": {"riskDecisionId": "risk-1", "source": "ytm"},
             },
             "executionAccountSource": "provider",
             "executionMode": "real",
@@ -143,6 +144,16 @@ def _risk_policy() -> RiskPolicy:
         max_position_notional=Decimal("5000"),
         max_symbol_notional={"BTCUSDT": Decimal("5000")},
         max_daily_loss=Decimal("250"),
+        max_total_drawdown=None,
         max_leverage=Decimal("1"),
         position_mode="one_way",
+    )
+
+
+def _risk_state() -> RiskState:
+    return RiskState(
+        realized_loss_by_date={"2026-05-10": Decimal("0")},
+        daily_equity_open_by_date={"2026-05-10": Decimal("1000")},
+        initial_equity=Decimal("1000"),
+        current_equity=Decimal("1000"),
     )

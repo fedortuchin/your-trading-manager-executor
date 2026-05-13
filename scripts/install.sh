@@ -2,7 +2,7 @@
 set -euo pipefail
 
 INSTALL_DIR="/opt/ytm-executor"
-IMAGE="ghcr.io/fedortuchin/your-trading-manager-executor:v0.7.7"
+IMAGE="ghcr.io/fedortuchin/your-trading-manager-executor:v0.7.8"
 SERVER_URL=""
 ENROLLMENT_TOKEN=""
 BROKER_PROVIDER=""
@@ -28,15 +28,15 @@ Options:
   --broker-provider <tbank|binance|okx>
                                       Prompt locally for broker credentials after enrollment.
   --validate-broker                 Validate broker credentials after the local prompt.
-  --wizard                          Prompt for broker credentials and local risk policy.
+  --wizard                          Prompt for broker credentials and local fail-safe.
   --enable-real-orders              Start the runtime with real order placement enabled.
-  --image <image>                    Default: ghcr.io/fedortuchin/your-trading-manager-executor:v0.7.7.
+  --image <image>                    Default: ghcr.io/fedortuchin/your-trading-manager-executor:v0.7.8.
   --install-dir <path>               Default: /opt/ytm-executor.
   --no-start                         Install and enroll, but do not start the compose service.
   -h, --help                         Show this help.
 
 Example:
-  curl -fsSL https://raw.githubusercontent.com/fedortuchin/your-trading-manager-executor/v0.7.7/scripts/install.sh | sudo bash -s -- \
+  curl -fsSL https://raw.githubusercontent.com/fedortuchin/your-trading-manager-executor/v0.7.8/scripts/install.sh | sudo bash -s -- \
     --server https://trademate.pro \
     --enrollment-token ytm_enroll_xxx \
     --wizard
@@ -254,13 +254,8 @@ configure_wizard_inputs() {
   if prompt_yes_no "Enable local real order placement" "no"; then
     ENABLE_REAL_ORDERS="true"
   fi
-  WIZARD_MARKETS="$(default_market_for_provider "$BROKER_PROVIDER")"
-  WIZARD_MARGIN_MODES="$(default_margin_for_provider "$BROKER_PROVIDER")"
-  WIZARD_ORDER_TYPES="limit,market"
-  WIZARD_MAX_ORDER_NOTIONAL="$(prompt_default "Optional local max order notional; Enter = no local limit" "")"
-  WIZARD_MAX_POSITION_NOTIONAL="$(prompt_default "Optional local max position notional; Enter = no local limit" "")"
   WIZARD_MAX_DAILY_LOSS="$(prompt_default "Optional local max daily loss; Enter = no local limit" "")"
-  WIZARD_MAX_LEVERAGE="$(prompt_default "Max leverage" "1")"
+  WIZARD_MAX_TOTAL_DRAWDOWN="$(prompt_default "Optional local max total drawdown; Enter = no local limit" "")"
 }
 
 append_csv_option() {
@@ -283,14 +278,9 @@ configure_risk_policy() {
   if [[ "$ENABLE_REAL_ORDERS" == "true" ]]; then
     RISK_ARGS+=(--allow-real)
   fi
-  append_csv_option "--allow-market" "$WIZARD_MARKETS"
-  append_csv_option "--allow-margin-mode" "$WIZARD_MARGIN_MODES"
-  append_csv_option "--allow-order-type" "$WIZARD_ORDER_TYPES"
-  [[ -z "$WIZARD_MAX_ORDER_NOTIONAL" ]] || RISK_ARGS+=(--max-order-notional "$WIZARD_MAX_ORDER_NOTIONAL")
-  [[ -z "$WIZARD_MAX_POSITION_NOTIONAL" ]] || RISK_ARGS+=(--max-position-notional "$WIZARD_MAX_POSITION_NOTIONAL")
   [[ -z "$WIZARD_MAX_DAILY_LOSS" ]] || RISK_ARGS+=(--max-daily-loss "$WIZARD_MAX_DAILY_LOSS")
-  [[ -z "$WIZARD_MAX_LEVERAGE" ]] || RISK_ARGS+=(--max-leverage "$WIZARD_MAX_LEVERAGE")
-  log "writing local risk policy"
+  [[ -z "$WIZARD_MAX_TOTAL_DRAWDOWN" ]] || RISK_ARGS+=(--max-total-drawdown "$WIZARD_MAX_TOTAL_DRAWDOWN")
+  log "writing local fail-safe policy"
   compose run --rm -T ytm-executor "${RISK_ARGS[@]}"
 }
 
