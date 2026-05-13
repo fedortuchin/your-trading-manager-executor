@@ -114,7 +114,8 @@ checks, hard-validates OKX account configuration (`net_mode`, supported margin a
 requires opening-order `stopLoss` and take-profit, converts real market entries into bounded
 IOC-limit orders using `maxSlippageBps`, attaches TP/SL through OKX `attachAlgoOrds`, normalizes the
 order, verifies integer leverage with `POST /api/v5/account/set-leverage`, calls OKX
-`order-precheck`, looks up an existing order by deterministic `clOrdId`, and only then calls
+`order-precheck` when the account mode supports that endpoint, looks up an existing order by
+deterministic `clOrdId`, and only then calls
 `POST /api/v5/trade/order`. Attached TP/SL uses market close prices (`tpOrdPx=-1`, `slOrdPx=-1`)
 and `last` trigger type by default. After submit, the executor verifies a matching pending OKX TP/SL
 algo order. If no matching algo exists and no position is open yet, it reports

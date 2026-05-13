@@ -71,15 +71,20 @@ class OkxSwapMainnetOrderPrecheckAdapter:
             inst_id,
         )
         params = okx_swap_order_precheck_params(request, rules=rules)
-        _okx_response_data(api.order_precheck(params), "order_precheck")
+        precheck = _order_precheck_payload(api=api, params=params, account_config=account_config)
         payload = {
             "adapter": OKX_SWAP_MAINNET_ORDER_PRECHECK_ADAPTER,
             "accountConfig": account_config,
             "clientOrderId": params["clOrdId"],
-            "executorAction": "order_precheck_validated",
+            "executorAction": (
+                "order_precheck_validated"
+                if precheck["status"] == "passed"
+                else "order_precheck_skipped"
+            ),
             "mainnet": True,
             "market": "okx_swap",
             "normalizedOrder": _public_normalized_order(params),
+            "precheck": precheck,
             "provider": "okx",
         }
         reject_secret_fields(payload)
@@ -88,7 +93,7 @@ class OkxSwapMainnetOrderPrecheckAdapter:
 
 @dataclass(frozen=True, slots=True)
 class OkxSwapMainnetOrderPlacementAdapter:
-    """Place OKX SWAP mainnet orders after local gates and OKX precheck pass."""
+    """Place OKX SWAP mainnet orders after local gates and supported OKX precheck pass."""
 
     api_key: str
     api_secret: str
@@ -126,7 +131,7 @@ class OkxSwapMainnetOrderPlacementAdapter:
                 expected=leverage_params,
             )
         params = okx_swap_order_params(request, rules=rules)
-        _okx_response_data(api.order_precheck(params), "order_precheck")
+        precheck = _order_precheck_payload(api=api, params=params, account_config=account_config)
         existing_order = _lookup_order_by_client_id(api=api, params=params)
         recovered = existing_order is not None
         response = (
@@ -158,7 +163,7 @@ class OkxSwapMainnetOrderPlacementAdapter:
             "market": "okx_swap",
             "leverage": leverage_result,
             "normalizedOrder": _public_normalized_order(params),
-            "precheck": "passed",
+            "precheck": precheck,
             "protection": protection,
             "protectionStatus": protection["status"],
             "provider": "okx",
@@ -317,7 +322,9 @@ def _okx_response_data(response: dict[str, Any], endpoint: str) -> list[dict[str
         raise ValueError(f"OKX {endpoint} response is invalid")
     code = str(response.get("code") or "")
     if code != "0":
-        raise ValueError(f"OKX {endpoint} rejected request with code {code or 'unknown'}")
+        message = _optional_text(response.get("msg"))
+        suffix = f": {message}" if message else ""
+        raise ValueError(f"OKX {endpoint} rejected request with code {code or 'unknown'}{suffix}")
     data = response.get("data", [])
     if data in ("", None):
         data = []
@@ -327,13 +334,35 @@ def _okx_response_data(response: dict[str, Any], endpoint: str) -> list[dict[str
     return [dict(item) for item in data]
 
 
+def _order_precheck_payload(
+    *,
+    api: OkxSwapApi,
+    params: dict[str, Any],
+    account_config: dict[str, str],
+) -> dict[str, str]:
+    account_level = account_config.get("acctLv")
+    if account_level == "2":
+        return {
+            "reason": (
+                "OKX order-precheck is only available for Multi-currency "
+                "and Portfolio margin modes"
+            ),
+            "reasonCode": "unsupported_for_futures_mode",
+            "status": "skipped",
+        }
+    _okx_response_data(api.order_precheck(params), "order_precheck")
+    return {"status": "passed"}
+
+
 def _single_order_response(items: list[dict[str, Any]], endpoint: str) -> dict[str, Any]:
     if not items:
         raise ValueError(f"OKX {endpoint} response data is empty")
     response = dict(items[0])
     status_code = _optional_text(response.get("sCode"))
     if status_code not in {None, "0"}:
-        raise ValueError(f"OKX {endpoint} rejected request with code {status_code}")
+        message = _optional_text(response.get("sMsg"))
+        suffix = f": {message}" if message else ""
+        raise ValueError(f"OKX {endpoint} rejected request with code {status_code}{suffix}")
     reject_secret_fields(response)
     return response
 

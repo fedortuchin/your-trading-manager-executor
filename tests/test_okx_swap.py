@@ -179,6 +179,7 @@ def test_okx_swap_adapter_calls_order_precheck_not_place_order() -> None:
     assert result.payload["accountConfig"] == {"acctLv": "3", "posMode": "net_mode"}
     assert result.payload["clientOrderId"] == api.precheck_calls[0]["params"]["clOrdId"]
     assert result.payload["executorAction"] == "order_precheck_validated"
+    assert result.payload["precheck"] == {"status": "passed"}
     assert normalized["attachedStopLoss"]["slTriggerPx"] == "95"
     assert normalized["attachedTakeProfit"]["tpTriggerPx"] == "110"
     assert normalized["instId"] == "BTC-USDT-SWAP"
@@ -220,6 +221,7 @@ def test_okx_swap_placement_adapter_prechecks_then_places_order() -> None:
     assert result.payload["protectionStatus"] == "protected"
     assert result.payload["providerOrderId"] == "okx-order-1"
     assert result.payload["providerStatus"] == "accepted"
+    assert result.payload["precheck"] == {"status": "passed"}
     assert normalized["attachedStopLoss"]["slTriggerPx"] == "95"
     assert normalized["attachedTakeProfit"]["tpTriggerPx"] == "110"
     assert normalized["ordType"] == "limit"
@@ -228,6 +230,42 @@ def test_okx_swap_placement_adapter_prechecks_then_places_order() -> None:
     assert protection["status"] == "protected"
     assert "private" not in repr(result.payload)
     assert "passphrase" not in repr(result.payload)
+
+
+def test_okx_swap_precheck_skips_order_precheck_in_futures_mode() -> None:
+    api = FakeOkxSwapApi(account_config={"acctLv": "2", "posMode": "net_mode"})
+    adapter = OkxSwapMainnetOrderPrecheckAdapter(
+        api_key="public",
+        api_secret="private",
+        passphrase="passphrase",
+        api=api,
+    )
+
+    result = adapter.prepare_order(_request())
+
+    assert api.precheck_calls == []
+    assert api.place_order_calls == []
+    assert result.payload["executorAction"] == "order_precheck_skipped"
+    assert result.payload["precheck"]["reasonCode"] == "unsupported_for_futures_mode"
+    assert result.payload["precheck"]["status"] == "skipped"
+
+
+def test_okx_swap_placement_skips_order_precheck_in_futures_mode() -> None:
+    api = FakeOkxSwapApi(account_config={"acctLv": "2", "posMode": "net_mode"})
+    adapter = OkxSwapMainnetOrderPlacementAdapter(
+        api_key="public",
+        api_secret="private",
+        passphrase="passphrase",
+        api=api,
+    )
+
+    result = adapter.prepare_order(_request())
+
+    assert api.precheck_calls == []
+    assert len(api.place_order_calls) == 1
+    assert result.payload["executorAction"] == "order_submitted"
+    assert result.payload["precheck"]["reasonCode"] == "unsupported_for_futures_mode"
+    assert result.payload["precheck"]["status"] == "skipped"
 
 
 def test_okx_swap_placement_rejects_broker_error_without_acknowledgement() -> None:

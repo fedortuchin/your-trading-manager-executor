@@ -61,7 +61,8 @@ For `external_paper`, the executor reports a sanitized acknowledgement with
 `order_placement_skipped`. For `real`, the separate `okx_swap_mainnet_order` adapter requires entry
 stop-loss and take-profit, converts naked market entries into bounded IOC-limit orders with
 `maxSlippageBps`, validates OKX account/position mode, verifies `set-leverage`, first calls the
-same `order-precheck`, looks up the deterministic client order id before retrying, then calls
+same `order-precheck` when OKX supports it for the account mode, looks up the deterministic client
+order id before retrying, then calls
 `POST /api/v5/trade/order` only when all local gates pass and the executor was started with
 `--enable-real-orders`. Attached TP/SL uses OKX `attachAlgoOrds` with market close prices. After
 submit, the executor verifies the active OKX TP/SL algo order and reports `protectionStatus` for
