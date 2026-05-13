@@ -110,7 +110,8 @@ margin mode.
 For OKX `real`, a command may explicitly request
 `commandPayload.adapter=okx_swap_mainnet_order`. This adapter is disabled unless the executor was
 started with `--enable-real-orders`. When enabled, the executor still repeats local fail-safe
-checks, hard-validates OKX account configuration (`net_mode`, supported margin account levels),
+checks and reloads the local kill-switch policy immediately before the placement adapter is built,
+hard-validates OKX account configuration (`net_mode`, supported margin account levels),
 requires opening-order `stopLoss` and take-profit, converts real market entries into bounded
 IOC-limit orders using `maxSlippageBps`, attaches TP/SL through OKX `attachAlgoOrds`, normalizes the
 order, verifies integer leverage with `POST /api/v5/account/set-leverage`, calls OKX

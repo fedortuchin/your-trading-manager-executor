@@ -380,6 +380,7 @@ def _process_lease_response(
         )
         return
     risk_policy = read_risk_policy(Path(args.risk_policy_file))
+    risk_policy_file = Path(args.risk_policy_file)
     decision = preflight_command(
         item,
         local_credentials=store.list(),
@@ -389,6 +390,7 @@ def _process_lease_response(
         ),
         risk_policy=risk_policy,
         risk_state=read_risk_state(Path(args.risk_state_file)),
+        final_risk_policy_loader=lambda: read_risk_policy(risk_policy_file),
         validation_summaries=validation_store.list_public(),
         real_order_placement_enabled=args.enable_real_orders,
     )

@@ -50,6 +50,6 @@ ytm-executor risk show
 
 ## Cloud Cannot Relax It
 
-YTM Cloud sends an approved command with sanitized `riskControls.source=ytm`. The executor independently loads its local fail-safe policy and local risk state before any broker adapter can run. A cloud-side command cannot disable the local kill switch, paper-only mode, or local drawdown stops.
+YTM Cloud sends an approved command with sanitized `riskControls.source=ytm`. The executor independently loads its local fail-safe policy and local risk state before any broker adapter can run. For real order adapters, it reloads the local fail-safe policy again immediately before constructing the broker placement adapter, so a kill switch flipped during polling blocks the order before any placement call. A cloud-side command cannot disable the local kill switch, paper-only mode, or local drawdown stops.
 
 Heartbeat reports only a sanitized summary: configured/enabled/kill-switch/paper-only flags and drawdown-limit presence. It does not upload broker secrets, the full policy file, or local risk state.

@@ -511,6 +511,59 @@ def test_preflight_okx_real_order_adapter_acknowledges_when_locally_enabled(
     assert "okx-passphrase" not in repr(decision.result_payload)
 
 
+def test_preflight_rechecks_local_kill_switch_immediately_before_real_order(
+    monkeypatch,
+) -> None:
+    command = _leased_command(provider="okx", execution_mode="real")
+    command["command"]["symbol"] = "BTCUSDT"
+    command["command"]["commandPayload"]["adapter"] = OKX_SWAP_MAINNET_ORDER_ADAPTER
+    command["command"]["commandPayload"]["market"] = "okx_swap"
+    command["command"]["commandPayload"]["quantity"] = "1"
+    command["command"]["stopLoss"] = "95"
+
+    class UnexpectedOkxPlacementAdapter:
+        def __init__(self, **kwargs):
+            raise AssertionError("adapter must not be built after final kill-switch check")
+
+    monkeypatch.setattr(
+        preflight_module,
+        "OkxSwapMainnetOrderPlacementAdapter",
+        UnexpectedOkxPlacementAdapter,
+    )
+
+    decision = preflight_command(
+        command,
+        local_credentials=(CredentialSummary(provider="okx", name="main"),),
+        local_secret_resolver=lambda provider, name: {
+            "apiKey": f"{provider}-{name}-public",
+            "apiSecret": "okx-private-secret",
+            "passphrase": "okx-passphrase",
+        },
+        risk_policy=_risk_policy(paper_only=False, market="okx_swap", symbol="BTCUSDT"),
+        risk_state=_risk_state(),
+        final_risk_policy_loader=lambda: _risk_policy(
+            kill_switch=True,
+            paper_only=False,
+            market="okx_swap",
+            symbol="BTCUSDT",
+        ),
+        validation_summaries=(
+            _validation(
+                provider="okx",
+                checked_at="2026-05-10T10:00:00Z",
+                trading_allowed=False,
+            ),
+        ),
+        real_order_placement_enabled=True,
+        now=datetime(2026, 5, 10, 10, 1, tzinfo=UTC),
+    )
+
+    assert decision.status == "rejected"
+    assert decision.result_payload["preflightReasonCode"] == "risk_kill_switch_enabled"
+    assert decision.result_payload["finalRiskPreflight"] == "failed"
+    assert decision.result_payload["adapterPreflight"] == "blocked"
+
+
 def _leased_command(*, provider: str, execution_mode: str) -> dict[str, object]:
     return {
         "command": {

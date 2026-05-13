@@ -50,6 +50,7 @@ def preflight_command(
     local_secret_resolver: Callable[[str, str], dict[str, str]] | None = None,
     risk_policy: RiskPolicy | None = None,
     risk_state: RiskState | None = None,
+    final_risk_policy_loader: Callable[[], RiskPolicy] | None = None,
     validation_summaries: Iterable[dict[str, Any]],
     real_order_placement_enabled: bool = False,
     now: datetime | None = None,
@@ -124,6 +125,35 @@ def preflight_command(
             "real order placement requires explicit local executor enablement",
             extra={"adapterPreflight": "blocked", "riskPreflight": "passed"},
         )
+    if execution_mode == "real" and adapter_name in REAL_ORDER_ADAPTERS:
+        try:
+            final_policy = final_risk_policy_loader() if final_risk_policy_loader else risk_policy
+        except ValueError as exc:
+            return _reject(
+                "risk_final_policy_invalid",
+                str(exc),
+                extra={"adapterPreflight": "blocked", "riskPreflight": "passed"},
+            )
+        final_risk_decision = evaluate_command_risk(
+            command,
+            execution_mode=execution_mode,
+            policy=final_policy or missing_risk_policy(),
+            state=risk_state or RiskState(
+                realized_loss_by_date={},
+                daily_equity_open_by_date={},
+            ),
+            now=timestamp,
+        )
+        if not final_risk_decision.passed:
+            return _reject(
+                final_risk_decision.reason_code or "risk_final_preflight_failed",
+                final_risk_decision.reason or "final local risk preflight failed",
+                extra={
+                    "adapterPreflight": "blocked",
+                    "finalRiskPreflight": "failed",
+                    "riskPreflight": "passed",
+                },
+            )
     try:
         adapter = _adapter_for_command(
             command,
@@ -170,6 +200,7 @@ def _acknowledge_real_order_placement(
         "adapterResult": adapter_payload,
         "executionMode": "real",
         "executorAction": str(adapter_payload.get("executorAction", "order_submitted")),
+        "finalRiskPreflight": "passed",
         "preflight": "passed",
         "provider": provider,
         "riskPreflight": "passed",
